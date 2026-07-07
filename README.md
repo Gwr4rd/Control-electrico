@@ -91,6 +91,11 @@ Aplicacion Android para registrar usuarios, recibos mensuales, lecturas internas
 - Menu superior redondeado con iconos por opcion.
 - Menu superior simplificado: usuarios, centro de respaldo y cambio de modo diurno/nocturno.
 - En Resumen, la lista de periodos muestra solo periodos con recibo y al menos una lectura.
+- Tarjeta de inicio rapido en Resumen para guiar el primer uso: usuarios, recibo, lecturas y sincronizacion.
+- Pantalla de Diagnostico con version, conteos de datos, ultimo respaldo, estado de sincronizacion y opcion para copiar el diagnostico.
+- Pantalla de Privacidad con explicacion de almacenamiento local, respaldos y sincronizacion opcional.
+- Vista previa de importacion de respaldo mejorada, comparando datos actuales contra datos importados antes de reemplazar o fusionar.
+- Soporte para gesto de atras de Android en pantallas internas, ademas del boton superior.
 
 En `Usuarios`, el campo `Periodo del cambio (YYYY-MM)` define desde que periodo aplica el estado activo/inactivo y residual. El boton eliminar retira al usuario desde el periodo actual sin borrar sus lecturas historicas.
 - IGV 18%.
