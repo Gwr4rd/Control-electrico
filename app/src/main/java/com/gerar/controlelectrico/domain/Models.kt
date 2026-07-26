@@ -95,7 +95,8 @@ data class AppSettings(
     val supplyAlias: String = "",
     val accountHolder: String = "",
     val monthlyReminderEnabled: Boolean = false,
-    val reminderDay: Int = 25
+    val reminderDay: Int = 25,
+    val updateRepositoryUrl: String = "https://github.com/Gwr4rd/Control-electrico"
 )
 
 data class PaymentResult(

@@ -3,6 +3,7 @@ package com.gerar.controlelectrico
 import android.Manifest
 import android.app.AlarmManager
 import android.app.PendingIntent
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -16,6 +17,7 @@ import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Base64
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -102,6 +104,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -150,6 +153,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -164,11 +169,14 @@ import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        cleanupInstalledUpdateIfNeeded(applicationContext)
         val repository = ElectricRepository(applicationContext)
         val syncManager = SupabaseSyncManager(applicationContext, repository)
         setContent {
@@ -212,6 +220,17 @@ private data class LocalBackupInfo(
     val path: String,
     val sizeBytes: Long,
     val lastModifiedMillis: Long
+)
+
+private data class AppUpdateInfo(
+    val tagName: String,
+    val versionName: String,
+    val releaseName: String,
+    val body: String,
+    val apkAssetName: String,
+    val apkDownloadUrl: String,
+    val apkSizeBytes: Long,
+    val publishedAt: String
 )
 
 private const val ALL_USERS_OPTION = "__all_users__"
@@ -265,6 +284,11 @@ private fun ControlElectricoApp(
     var pendingJson by remember { mutableStateOf("") }
     var pendingImport by remember { mutableStateOf<PendingImport?>(null) }
     var backupPassword by rememberSaveable { mutableStateOf("") }
+    var startupUpdate by remember { mutableStateOf<AppUpdateInfo?>(null) }
+    var startupUpdateMessage by rememberSaveable { mutableStateOf("") }
+    var startupUpdateDownloading by rememberSaveable { mutableStateOf(false) }
+    var startupUpdateProgress by rememberSaveable { mutableStateOf(0) }
+    val scope = rememberCoroutineScope()
     val logo = if (repository.isAmoled.value) R.drawable.medidor_amoled else R.drawable.medidor_original
     val isManagementScreen = selectedTab == USERS_MANAGEMENT_TAB ||
         selectedTab == SERVICES_MANAGEMENT_TAB ||
@@ -318,6 +342,31 @@ private fun ControlElectricoApp(
             Toast.makeText(context, "No se pudo importar el respaldo: ${error.message}", Toast.LENGTH_LONG).show()
         }
     }
+    val startupInstallPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        Toast.makeText(
+            context,
+            "Si activaste el permiso, vuelve a tocar Descargar e instalar.",
+            Toast.LENGTH_LONG
+        ).show()
+    }
+
+    LaunchedEffect(repository.settings.value.updateRepositoryUrl) {
+        val repositoryUrl = repository.settings.value.updateRepositoryUrl
+        if (repositoryUrl.isBlank() || !shouldCheckGithubUpdate(context)) return@LaunchedEffect
+        runCatching {
+            checkForGithubUpdate(context, repositoryUrl)
+        }.onSuccess { update ->
+            markGithubUpdateChecked(context)
+            if (update != null) {
+                startupUpdate = update
+                startupUpdateMessage = ""
+            }
+        }.onFailure {
+            markGithubUpdateChecked(context)
+        }
+    }
 
     pendingImport?.let { pending ->
         ImportPreviewDialog(
@@ -348,6 +397,48 @@ private fun ControlElectricoApp(
                 val mode = if (replaceAll) "reemplazados" else "fusionados"
                 val backupMessage = autoBackup?.let { " Copia previa: ${it.name}" }.orEmpty()
                 Toast.makeText(context, "Datos $mode correctamente.$backupMessage", Toast.LENGTH_LONG).show()
+            }
+        )
+    }
+
+    startupUpdate?.let { update ->
+        UpdateAvailableDialog(
+            update = update,
+            message = startupUpdateMessage,
+            downloading = startupUpdateDownloading,
+            progress = startupUpdateProgress,
+            onDismiss = {
+                startupUpdate = null
+                startupUpdateMessage = ""
+            },
+            onInstall = {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                    !context.packageManager.canRequestPackageInstalls()
+                ) {
+                    startupUpdateMessage = "Activa Permitir desde esta fuente para instalar el APK descargado."
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:${context.packageName}")
+                    )
+                    startupInstallPermissionLauncher.launch(intent)
+                    return@UpdateAvailableDialog
+                }
+
+                startupUpdateDownloading = true
+                startupUpdateProgress = 0
+                startupUpdateMessage = "Descargando APK..."
+                scope.launch {
+                    runCatching {
+                        downloadAndInstallUpdate(context, update) { progress ->
+                            startupUpdateProgress = progress
+                        }
+                    }.onSuccess {
+                        startupUpdateMessage = "APK descargado. Confirma la instalacion en Android."
+                    }.onFailure { error ->
+                        startupUpdateMessage = "No se pudo instalar: ${error.message ?: "error desconocido"}"
+                    }
+                    startupUpdateDownloading = false
+                }
             }
         )
     }
@@ -1182,6 +1273,61 @@ private fun ImportDataSummary(title: String, backup: BackupData) {
 }
 
 @Composable
+private fun UpdateAvailableDialog(
+    update: AppUpdateInfo,
+    message: String,
+    downloading: Boolean,
+    progress: Int,
+    onDismiss: () -> Unit,
+    onInstall: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = { if (!downloading) onDismiss() },
+        icon = { Icon(Icons.Default.CloudDownload, contentDescription = null) },
+        title = { Text("Actualizacion disponible") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Hay una nueva version de Control Electrico.")
+                MetricRow("Version", update.versionName)
+                MetricRow("Archivo", update.apkAssetName)
+                MetricRow("Tamaño", update.apkSizeBytes.fileSize())
+                if (update.releaseName.isNotBlank()) {
+                    MetricRow("Release", update.releaseName)
+                }
+                if (message.isNotBlank()) {
+                    Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (downloading) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Text("$progress%", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Text(
+                    text = "Android pedira confirmar la instalacion manualmente.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = !downloading,
+                onClick = onInstall,
+                shape = RoundedCornerShape(22.dp)
+            ) {
+                Icon(Icons.Default.FileDownload, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Descargar e instalar")
+            }
+        },
+        dismissButton = {
+            TextButton(enabled = !downloading, onClick = onDismiss) {
+                Text("Mas tarde")
+            }
+        },
+        shape = RoundedCornerShape(28.dp)
+    )
+}
+
+@Composable
 private fun ConfirmActionDialog(
     title: String,
     message: String,
@@ -1466,6 +1612,7 @@ private fun SummaryBackupCard(repository: ElectricRepository) {
 @Composable
 private fun SettingsScreen(repository: ElectricRepository, modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val current = repository.settings.value
     var igvPercent by rememberSaveable { mutableStateOf((current.igvRate * 100.0).input()) }
     var roundUp by rememberSaveable { mutableStateOf(current.roundUpToTenth) }
@@ -1473,12 +1620,27 @@ private fun SettingsScreen(repository: ElectricRepository, modifier: Modifier = 
     var accountHolder by rememberSaveable { mutableStateOf(current.accountHolder) }
     var reminderEnabled by rememberSaveable { mutableStateOf(current.monthlyReminderEnabled) }
     var reminderDay by rememberSaveable { mutableStateOf(current.reminderDay.toString()) }
+    var updateRepositoryUrl by rememberSaveable { mutableStateOf(current.updateRepositoryUrl) }
+    var checkingUpdate by rememberSaveable { mutableStateOf(false) }
+    var downloadingUpdate by rememberSaveable { mutableStateOf(false) }
+    var updateMessage by rememberSaveable { mutableStateOf("") }
+    var updateProgress by rememberSaveable { mutableStateOf(0) }
+    var availableUpdate by remember { mutableStateOf<AppUpdateInfo?>(null) }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (!granted) {
             Toast.makeText(context, "Sin permiso de notificaciones no se mostrara el recordatorio.", Toast.LENGTH_LONG).show()
         }
+    }
+    val installPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        Toast.makeText(
+            context,
+            "Si activaste el permiso, vuelve a tocar Descargar e instalar.",
+            Toast.LENGTH_LONG
+        ).show()
     }
 
     LazyColumn(
@@ -1509,8 +1671,10 @@ private fun SettingsScreen(repository: ElectricRepository, modifier: Modifier = 
                         supplyAlias = supplyAlias.trim(),
                         accountHolder = accountHolder.trim(),
                         monthlyReminderEnabled = reminderEnabled,
-                        reminderDay = reminderDay.toIntValue().coerceIn(1, 28)
+                        reminderDay = reminderDay.toIntValue().coerceIn(1, 28),
+                        updateRepositoryUrl = normalizeGithubRepositoryUrl(updateRepositoryUrl.trim())
                     )
+                    updateRepositoryUrl = next.updateRepositoryUrl
                     repository.saveSettings(next)
                     if (next.monthlyReminderEnabled) {
                         if (Build.VERSION.SDK_INT >= 33 &&
@@ -1523,6 +1687,98 @@ private fun SettingsScreen(repository: ElectricRepository, modifier: Modifier = 
                         cancelMonthlyReminder(context)
                     }
                     Toast.makeText(context, "Configuracion guardada", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        item {
+            FormCard(title = "Actualizaciones por GitHub") {
+                TextInput("Repositorio GitHub", updateRepositoryUrl) { updateRepositoryUrl = it }
+                Text(
+                    text = "Ejemplo: https://github.com/tu_usuario/control-electrico. La app revisara el ultimo Release y buscara un APK.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Button(
+                    enabled = !checkingUpdate && !downloadingUpdate && updateRepositoryUrl.isNotBlank(),
+                    onClick = {
+                        val normalized = normalizeGithubRepositoryUrl(updateRepositoryUrl.trim())
+                        updateRepositoryUrl = normalized
+                        repository.saveSettings(repository.settings.value.copy(updateRepositoryUrl = normalized))
+                        availableUpdate = null
+                        updateMessage = "Consultando GitHub..."
+                        checkingUpdate = true
+                        scope.launch {
+                            runCatching {
+                                checkForGithubUpdate(context, normalized)
+                            }.onSuccess { update ->
+                                availableUpdate = update
+                                updateMessage = update?.let {
+                                    "Nueva version disponible: ${it.versionName} (${it.apkAssetName})"
+                                } ?: "La app ya esta actualizada."
+                            }.onFailure { error ->
+                                updateMessage = "No se pudo verificar: ${error.message ?: "error desconocido"}"
+                            }
+                            checkingUpdate = false
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(22.dp)
+                ) {
+                    Icon(Icons.Default.CloudDownload, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(if (checkingUpdate) "Buscando..." else "Buscar actualizacion")
+                }
+
+                if (updateMessage.isNotBlank()) {
+                    Text(updateMessage, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+
+                availableUpdate?.let { update ->
+                    MetricRow("Version encontrada", update.versionName)
+                    MetricRow("Tamaño APK", update.apkSizeBytes.fileSize())
+                    if (update.releaseName.isNotBlank()) {
+                        MetricRow("Release", update.releaseName)
+                    }
+                    Button(
+                        enabled = !downloadingUpdate,
+                        onClick = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                                !context.packageManager.canRequestPackageInstalls()
+                            ) {
+                                val intent = Intent(
+                                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                    Uri.parse("package:${context.packageName}")
+                                )
+                                installPermissionLauncher.launch(intent)
+                                updateMessage = "Activa Permitir desde esta fuente para instalar el APK descargado."
+                                return@Button
+                            }
+
+                            downloadingUpdate = true
+                            updateProgress = 0
+                            updateMessage = "Descargando APK..."
+                            scope.launch {
+                                runCatching {
+                                    downloadAndInstallUpdate(context, update) { progress ->
+                                        updateProgress = progress
+                                    }
+                                }.onSuccess {
+                                    updateMessage = "APK descargado. Confirma la instalacion en Android."
+                                }.onFailure { error ->
+                                    updateMessage = "No se pudo instalar: ${error.message ?: "error desconocido"}"
+                                }
+                                downloadingUpdate = false
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(22.dp)
+                    ) {
+                        Icon(Icons.Default.FileDownload, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(if (downloadingUpdate) "Descargando $updateProgress%" else "Descargar e instalar")
+                    }
+                    if (downloadingUpdate) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
                 }
             }
         }
@@ -3765,6 +4021,209 @@ private fun appVersionName(context: Context): String {
     return runCatching {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
     }.getOrDefault("desconocida")
+}
+
+private suspend fun checkForGithubUpdate(context: Context, repositoryUrl: String): AppUpdateInfo? {
+    val repo = githubRepoPath(repositoryUrl)
+        ?: error("Ingresa una URL valida de GitHub, por ejemplo https://github.com/usuario/repositorio")
+    val currentVersion = appVersionName(context)
+    val release = withContext(Dispatchers.IO) {
+        val connection = (URL("https://api.github.com/repos/$repo/releases/latest").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 15000
+            readTimeout = 20000
+            setRequestProperty("Accept", "application/vnd.github+json")
+            setRequestProperty("User-Agent", "Control-Electrico-Android")
+        }
+        try {
+            val response = if (connection.responseCode in 200..299) {
+                connection.inputStream.bufferedReader().use { it.readText() }
+            } else {
+                val errorBody = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                error("GitHub respondio ${connection.responseCode}: ${githubErrorMessage(errorBody)}")
+            }
+            JSONObject(response)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    val tag = release.optString("tag_name")
+    val latestVersion = tag.trim().removePrefix("v").removePrefix("V")
+    if (compareVersions(latestVersion, currentVersion) <= 0) return null
+    val assets = release.optJSONArray("assets").jsonObjects()
+    val apkAsset = assets
+        .filter { it.optString("name").endsWith(".apk", ignoreCase = true) }
+        .sortedWith(
+            compareByDescending<JSONObject> { it.optString("name").contains("android", ignoreCase = true) }
+                .thenByDescending { it.optString("name").contains(latestVersion, ignoreCase = true) }
+        )
+        .firstOrNull()
+        ?: error("El ultimo Release no tiene un archivo APK adjunto.")
+
+    return AppUpdateInfo(
+        tagName = tag,
+        versionName = latestVersion.ifBlank { tag },
+        releaseName = release.optString("name"),
+        body = release.optString("body"),
+        apkAssetName = apkAsset.optString("name"),
+        apkDownloadUrl = apkAsset.optString("browser_download_url"),
+        apkSizeBytes = apkAsset.optLong("size", 0L),
+        publishedAt = release.optString("published_at")
+    )
+}
+
+private suspend fun downloadAndInstallUpdate(
+    context: Context,
+    update: AppUpdateInfo,
+    onProgress: suspend (Int) -> Unit
+) {
+    val apkFile = withContext(Dispatchers.IO) {
+        val updatesDir = File(context.cacheDir, "github_updates").apply { mkdirs() }
+        updatesDir.listFiles()?.forEach { file ->
+            if (file.extension.equals("apk", ignoreCase = true)) file.delete()
+        }
+        val safeApkName = update.apkAssetName
+            .removeSuffix(".apk")
+            .fileNameSafe()
+            .ifBlank { "control_electrico_${update.versionName.fileNameSafe()}" } + ".apk"
+        val target = File(updatesDir, safeApkName)
+        val connection = (URL(update.apkDownloadUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 15000
+            readTimeout = 60000
+            setRequestProperty("User-Agent", "Control-Electrico-Android")
+        }
+        try {
+            if (connection.responseCode !in 200..299) {
+                error("Descarga rechazada por GitHub (${connection.responseCode}).")
+            }
+            val total = connection.contentLengthLong.coerceAtLeast(update.apkSizeBytes)
+            var downloaded = 0L
+            connection.inputStream.use { input ->
+                target.outputStream().use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        output.write(buffer, 0, read)
+                        downloaded += read
+                        if (total > 0) {
+                            withContext(Dispatchers.Main) {
+                                onProgress(((downloaded * 100) / total).toInt().coerceIn(0, 100))
+                            }
+                        }
+                    }
+                }
+            }
+            target
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    rememberPendingUpdateApk(context, apkFile, update.versionName)
+    val apkUri = FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        apkFile
+    )
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(apkUri, "application/vnd.android.package-archive")
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    try {
+        context.startActivity(intent)
+    } catch (error: ActivityNotFoundException) {
+        throw IllegalStateException("No se encontro instalador de paquetes en este dispositivo.", error)
+    }
+}
+
+private fun githubRepoPath(rawUrl: String): String? {
+    val cleaned = rawUrl.trim()
+        .removeSuffix("/")
+        .removeSuffix(".git")
+        .removeSuffix("/releases")
+        .removeSuffix("/releases/latest")
+    val match = Regex("""github\.com[:/]+([^/\s]+)/([^/\s]+)""", RegexOption.IGNORE_CASE)
+        .find(cleaned)
+        ?: return null
+    return "${match.groupValues[1]}/${match.groupValues[2].removeSuffix(".git")}"
+}
+
+private fun normalizeGithubRepositoryUrl(rawUrl: String): String {
+    if (rawUrl.isBlank()) return ""
+    return githubRepoPath(rawUrl)?.let { "https://github.com/$it" } ?: rawUrl.trim()
+}
+
+private fun compareVersions(left: String, right: String): Int {
+    val leftParts = versionParts(left)
+    val rightParts = versionParts(right)
+    val maxSize = maxOf(leftParts.size, rightParts.size, 1)
+    repeat(maxSize) { index ->
+        val comparison = (leftParts.getOrElse(index) { 0 }).compareTo(rightParts.getOrElse(index) { 0 })
+        if (comparison != 0) return comparison
+    }
+    return 0
+}
+
+private fun versionParts(version: String): List<Int> {
+    return Regex("""\d+""")
+        .findAll(version)
+        .map { it.value.toIntOrNull() ?: 0 }
+        .toList()
+}
+
+private fun githubErrorMessage(raw: String): String {
+    return runCatching { JSONObject(raw).optString("message") }
+        .getOrDefault("")
+        .ifBlank { "no se pudo leer el ultimo Release" }
+}
+
+private fun rememberPendingUpdateApk(context: Context, apkFile: File, targetVersion: String) {
+    context.getSharedPreferences("control_electrico_updates", Context.MODE_PRIVATE)
+        .edit()
+        .putString("pending_apk_path", apkFile.absolutePath)
+        .putString("pending_target_version", targetVersion)
+        .apply()
+}
+
+private fun shouldCheckGithubUpdate(context: Context): Boolean {
+    val prefs = context.getSharedPreferences("control_electrico_updates", Context.MODE_PRIVATE)
+    val lastChecked = prefs.getLong("last_github_check_millis", 0L)
+    val oneDayMillis = 24L * 60L * 60L * 1000L
+    return System.currentTimeMillis() - lastChecked > oneDayMillis
+}
+
+private fun markGithubUpdateChecked(context: Context) {
+    context.getSharedPreferences("control_electrico_updates", Context.MODE_PRIVATE)
+        .edit()
+        .putLong("last_github_check_millis", System.currentTimeMillis())
+        .apply()
+}
+
+private fun cleanupInstalledUpdateIfNeeded(context: Context) {
+    val prefs = context.getSharedPreferences("control_electrico_updates", Context.MODE_PRIVATE)
+    val path = prefs.getString("pending_apk_path", "").orEmpty()
+    val targetVersion = prefs.getString("pending_target_version", "").orEmpty()
+    val updatesDir = File(context.cacheDir, "github_updates")
+    if (path.isBlank() || targetVersion.isBlank()) {
+        updatesDir.listFiles()?.forEach { file ->
+            if (file.extension.equals("apk", ignoreCase = true) && file.lastModified() < System.currentTimeMillis() - 7L * 24L * 60L * 60L * 1000L) {
+                file.delete()
+            }
+        }
+        return
+    }
+
+    if (compareVersions(appVersionName(context), targetVersion) >= 0) {
+        File(path).delete()
+        updatesDir.listFiles()?.forEach { file ->
+            if (file.extension.equals("apk", ignoreCase = true)) file.delete()
+        }
+        prefs.edit().clear().apply()
+    }
 }
 
 private fun suggestedPreviousReading(

@@ -154,6 +154,7 @@ class ElectricRepository(context: Context) {
             .putString(KEY_ACCOUNT_HOLDER, settings.value.accountHolder)
             .putBoolean(KEY_MONTHLY_REMINDER_ENABLED, settings.value.monthlyReminderEnabled)
             .putInt(KEY_REMINDER_DAY, settings.value.reminderDay)
+            .putString(KEY_UPDATE_REPOSITORY_URL, settings.value.updateRepositoryUrl)
             .apply()
         onDataChanged?.invoke()
     }
@@ -187,7 +188,8 @@ class ElectricRepository(context: Context) {
                     supplyAlias = next.optString("supplyAlias"),
                     accountHolder = next.optString("accountHolder"),
                     monthlyReminderEnabled = next.optBoolean("monthlyReminderEnabled", false),
-                    reminderDay = next.optInt("reminderDay", 25).coerceIn(1, 28)
+                    reminderDay = next.optInt("reminderDay", 25).coerceIn(1, 28),
+                    updateRepositoryUrl = next.optString("updateRepositoryUrl", DEFAULT_UPDATE_REPOSITORY_URL)
                 )
             )
         }
@@ -436,6 +438,7 @@ class ElectricRepository(context: Context) {
         .put("accountHolder", accountHolder)
         .put("monthlyReminderEnabled", monthlyReminderEnabled)
         .put("reminderDay", reminderDay)
+        .put("updateRepositoryUrl", updateRepositoryUrl)
 
     private fun UserEntity.toElectricUser(): ElectricUser = ElectricUser(
         userId = userId,
@@ -671,7 +674,8 @@ class ElectricRepository(context: Context) {
         supplyAlias = prefs.getString(KEY_SUPPLY_ALIAS, "").orEmpty(),
         accountHolder = prefs.getString(KEY_ACCOUNT_HOLDER, "").orEmpty(),
         monthlyReminderEnabled = prefs.getBoolean(KEY_MONTHLY_REMINDER_ENABLED, false),
-        reminderDay = prefs.getInt(KEY_REMINDER_DAY, 25).coerceIn(1, 28)
+        reminderDay = prefs.getInt(KEY_REMINDER_DAY, 25).coerceIn(1, 28),
+        updateRepositoryUrl = prefs.getString(KEY_UPDATE_REPOSITORY_URL, DEFAULT_UPDATE_REPOSITORY_URL).orEmpty()
     )
 
     private fun currentPeriod(): String = YearMonth.now().toString()
@@ -689,5 +693,7 @@ class ElectricRepository(context: Context) {
         const val KEY_ACCOUNT_HOLDER = "account_holder"
         const val KEY_MONTHLY_REMINDER_ENABLED = "monthly_reminder_enabled"
         const val KEY_REMINDER_DAY = "reminder_day"
+        const val KEY_UPDATE_REPOSITORY_URL = "update_repository_url"
+        const val DEFAULT_UPDATE_REPOSITORY_URL = "https://github.com/Gwr4rd/Control-electrico"
     }
 }
