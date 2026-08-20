@@ -3,6 +3,7 @@ package com.gerar.controlelectrico
 import android.Manifest
 import android.app.AlarmManager
 import android.app.PendingIntent
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -16,6 +17,7 @@ import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Base64
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -35,6 +37,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -45,8 +48,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
@@ -61,6 +66,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.MoreVert
@@ -99,6 +105,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -147,6 +154,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -161,11 +170,14 @@ import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        cleanupInstalledUpdateIfNeeded(applicationContext)
         val repository = ElectricRepository(applicationContext)
         val syncManager = SupabaseSyncManager(applicationContext, repository)
         setContent {
@@ -211,6 +223,17 @@ private data class LocalBackupInfo(
     val lastModifiedMillis: Long
 )
 
+private data class AppUpdateInfo(
+    val tagName: String,
+    val versionName: String,
+    val releaseName: String,
+    val body: String,
+    val apkAssetName: String,
+    val apkDownloadUrl: String,
+    val apkSizeBytes: Long,
+    val publishedAt: String
+)
+
 private const val ALL_USERS_OPTION = "__all_users__"
 private const val OTHER_SERVICE_OPTION = "Otro servicio"
 private const val USERS_MANAGEMENT_TAB = 4
@@ -218,6 +241,11 @@ private const val SERVICES_MANAGEMENT_TAB = 5
 private const val BACKUP_CENTER_TAB = 6
 private const val SETTINGS_TAB = 7
 private const val ACCOUNT_SYNC_TAB = 8
+private const val DIAGNOSTICS_TAB = 9
+private const val PRIVACY_TAB = 10
+private const val ABOUT_TAB = 11
+private const val KEY_QUICK_START_DISMISSED = "quick_start_dismissed"
+private const val APP_CREATOR_WEBSITE = "https://github.com/Gwr4rd/Control-electrico"
 private const val TARIFF_SINGLE = "Precio único por kWh"
 private const val TARIFF_TWO_BLOCKS = "Dos bloques kWh"
 private const val TARIFF_ESTIMATED = "Estimar si no hay precio"
@@ -259,12 +287,20 @@ private fun ControlElectricoApp(
     var pendingJson by remember { mutableStateOf("") }
     var pendingImport by remember { mutableStateOf<PendingImport?>(null) }
     var backupPassword by rememberSaveable { mutableStateOf("") }
+    var startupUpdate by remember { mutableStateOf<AppUpdateInfo?>(null) }
+    var startupUpdateMessage by rememberSaveable { mutableStateOf("") }
+    var startupUpdateDownloading by rememberSaveable { mutableStateOf(false) }
+    var startupUpdateProgress by rememberSaveable { mutableStateOf(0) }
+    val scope = rememberCoroutineScope()
     val logo = if (repository.isAmoled.value) R.drawable.medidor_amoled else R.drawable.medidor_original
     val isManagementScreen = selectedTab == USERS_MANAGEMENT_TAB ||
         selectedTab == SERVICES_MANAGEMENT_TAB ||
         selectedTab == BACKUP_CENTER_TAB ||
         selectedTab == SETTINGS_TAB ||
-        selectedTab == ACCOUNT_SYNC_TAB
+        selectedTab == ACCOUNT_SYNC_TAB ||
+        selectedTab == DIAGNOSTICS_TAB ||
+        selectedTab == PRIVACY_TAB ||
+        selectedTab == ABOUT_TAB
     val title = when (selectedTab) {
         0 -> "Recibo"
         1 -> "Lecturas"
@@ -275,6 +311,9 @@ private fun ControlElectricoApp(
         BACKUP_CENTER_TAB -> "Respaldo"
         SETTINGS_TAB -> "Configuracion"
         ACCOUNT_SYNC_TAB -> "Cuenta y sincronización"
+        DIAGNOSTICS_TAB -> "Diagnóstico"
+        PRIVACY_TAB -> "Privacidad"
+        ABOUT_TAB -> "Acerca de"
         else -> "Control Eléctrico"
     }
 
@@ -308,10 +347,36 @@ private fun ControlElectricoApp(
             Toast.makeText(context, "No se pudo importar el respaldo: ${error.message}", Toast.LENGTH_LONG).show()
         }
     }
+    val startupInstallPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        Toast.makeText(
+            context,
+            "Si activaste el permiso, vuelve a tocar Descargar e instalar.",
+            Toast.LENGTH_LONG
+        ).show()
+    }
+
+    LaunchedEffect(repository.settings.value.updateRepositoryUrl) {
+        val repositoryUrl = repository.settings.value.updateRepositoryUrl
+        if (repositoryUrl.isBlank() || !shouldCheckGithubUpdate(context)) return@LaunchedEffect
+        runCatching {
+            checkForGithubUpdate(context, repositoryUrl)
+        }.onSuccess { update ->
+            markGithubUpdateChecked(context)
+            if (update != null) {
+                startupUpdate = update
+                startupUpdateMessage = ""
+            }
+        }.onFailure {
+            markGithubUpdateChecked(context)
+        }
+    }
 
     pendingImport?.let { pending ->
         ImportPreviewDialog(
             backup = pending.backup,
+            currentBackup = repository.snapshotBackupData(),
             sourceLabel = pending.sourceLabel,
             onDismiss = { pendingImport = null },
             onConfirm = { replaceAll ->
@@ -337,6 +402,48 @@ private fun ControlElectricoApp(
                 val mode = if (replaceAll) "reemplazados" else "fusionados"
                 val backupMessage = autoBackup?.let { " Copia previa: ${it.name}" }.orEmpty()
                 Toast.makeText(context, "Datos $mode correctamente.$backupMessage", Toast.LENGTH_LONG).show()
+            }
+        )
+    }
+
+    startupUpdate?.let { update ->
+        UpdateAvailableDialog(
+            update = update,
+            message = startupUpdateMessage,
+            downloading = startupUpdateDownloading,
+            progress = startupUpdateProgress,
+            onDismiss = {
+                startupUpdate = null
+                startupUpdateMessage = ""
+            },
+            onInstall = {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                    !context.packageManager.canRequestPackageInstalls()
+                ) {
+                    startupUpdateMessage = "Activa Permitir desde esta fuente para instalar el APK descargado."
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:${context.packageName}")
+                    )
+                    startupInstallPermissionLauncher.launch(intent)
+                    return@UpdateAvailableDialog
+                }
+
+                startupUpdateDownloading = true
+                startupUpdateProgress = 0
+                startupUpdateMessage = "Descargando APK..."
+                scope.launch {
+                    runCatching {
+                        downloadAndInstallUpdate(context, update) { progress ->
+                            startupUpdateProgress = progress
+                        }
+                    }.onSuccess {
+                        startupUpdateMessage = "APK descargado. Confirma la instalacion en Android."
+                    }.onFailure { error ->
+                        startupUpdateMessage = "No se pudo instalar: ${error.message ?: "error desconocido"}"
+                    }
+                    startupUpdateDownloading = false
+                }
             }
         )
     }
@@ -442,6 +549,33 @@ private fun ControlElectricoApp(
                                 }
                             )
                             DropdownMenuItem(
+                                leadingIcon = { Icon(Icons.Default.ErrorOutline, contentDescription = null) },
+                                text = { Text("Diagnóstico") },
+                                onClick = {
+                                    lastMainTab = selectedTab
+                                    selectedTab = DIAGNOSTICS_TAB
+                                    menuExpanded = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                leadingIcon = { Icon(Icons.Default.CheckCircle, contentDescription = null) },
+                                text = { Text("Privacidad") },
+                                onClick = {
+                                    lastMainTab = selectedTab
+                                    selectedTab = PRIVACY_TAB
+                                    menuExpanded = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+                                text = { Text("Acerca de") },
+                                onClick = {
+                                    lastMainTab = selectedTab
+                                    selectedTab = ABOUT_TAB
+                                    menuExpanded = false
+                                }
+                            )
+                            DropdownMenuItem(
                                 leadingIcon = {
                                     Icon(
                                         if (repository.isAmoled.value) Icons.Default.LightMode else Icons.Default.NightsStay,
@@ -476,7 +610,21 @@ private fun ControlElectricoApp(
             0 -> ReceiptScreen(repository, modifier)
             1 -> ReadingsScreen(repository, modifier)
             2 -> ServicesScreen(repository, modifier)
-            3 -> SummaryScreen(repository, modifier)
+            3 -> SummaryScreen(
+                repository = repository,
+                modifier = modifier,
+                onOpenReceipt = { selectedTab = 0 },
+                onOpenReadings = { selectedTab = 1 },
+                onOpenUsers = {
+                    lastMainTab = selectedTab
+                    selectedTab = USERS_MANAGEMENT_TAB
+                },
+                onOpenSync = {
+                    lastMainTab = selectedTab
+                    selectedTab = ACCOUNT_SYNC_TAB
+                },
+                syncConfigured = syncManager.isConfigured()
+            )
             USERS_MANAGEMENT_TAB -> UsersScreen(repository, modifier)
             SERVICES_MANAGEMENT_TAB -> ServicesScreen(repository, modifier)
             BACKUP_CENTER_TAB -> BackupCenterScreen(
@@ -501,6 +649,9 @@ private fun ControlElectricoApp(
             )
             SETTINGS_TAB -> SettingsScreen(repository, modifier)
             ACCOUNT_SYNC_TAB -> AccountSyncScreen(syncManager, modifier)
+            DIAGNOSTICS_TAB -> DiagnosticsScreen(repository, syncManager, modifier)
+            PRIVACY_TAB -> PrivacyScreen(modifier)
+            ABOUT_TAB -> AboutScreen(modifier)
         }
     }
 }
@@ -1061,6 +1212,7 @@ private fun syncStatusTitle(syncManager: SupabaseSyncManager): String {
 @Composable
 private fun ImportPreviewDialog(
     backup: BackupData,
+    currentBackup: BackupData,
     sourceLabel: String,
     onDismiss: () -> Unit,
     onConfirm: (Boolean) -> Unit
@@ -1072,23 +1224,31 @@ private fun ImportPreviewDialog(
         shape = RoundedCornerShape(24.dp),
         title = { Text("Importar respaldo") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Origen: $sourceLabel", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                MetricRow("Usuarios", backup.users.size.toString())
-                MetricRow("Recibos", backup.receipts.size.toString())
-                MetricRow("Lecturas", backup.readings.size.toString())
-                MetricRow("Servicios", backup.services.size.toString())
-                MetricRow("Pagos", backup.payments.size.toString())
-                MetricRow("Ultimo periodo", backup.latestPeriod().ifBlank { "Sin periodo" })
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Origen: $sourceLabel",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                ImportDataSummary(title = "Datos actuales", backup = currentBackup)
+                ImportDataSummary(title = "Datos del respaldo", backup = backup)
                 Divider()
                 ToggleRow("Reemplazar todo", replaceAll) { replaceAll = it }
                 Text(
                     text = if (replaceAll) {
-                        "Se creara una copia automatica y luego se reemplazaran los datos actuales."
+                        "Se creara una copia automatica local y luego se reemplazaran usuarios, recibos, lecturas, servicios y pagos actuales."
                     } else {
-                        "Se creara una copia automatica y luego se fusionaran registros sin duplicar claves existentes."
+                        "Se creara una copia automatica local y luego se fusionaran registros. Si una clave coincide, el respaldo importado tendra prioridad."
                     },
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "Revisa las cantidades antes de continuar. Esta accion puede cambiar el resumen de periodos anteriores.",
+                    color = MaterialTheme.colorScheme.error
                 )
             }
         },
@@ -1102,6 +1262,83 @@ private fun ImportPreviewDialog(
                 Text("Cancelar")
             }
         }
+    )
+}
+
+@Composable
+private fun ImportDataSummary(title: String, backup: BackupData) {
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(title, fontWeight = FontWeight.SemiBold)
+            MetricRow("Usuarios", backup.users.size.toString())
+            MetricRow("Recibos", backup.receipts.size.toString())
+            MetricRow("Lecturas", backup.readings.size.toString())
+            MetricRow("Servicios", backup.services.size.toString())
+            MetricRow("Pagos", backup.payments.size.toString())
+            MetricRow("Ultimo periodo", backup.latestPeriod().ifBlank { "Sin periodo" })
+        }
+    }
+}
+
+@Composable
+private fun UpdateAvailableDialog(
+    update: AppUpdateInfo,
+    message: String,
+    downloading: Boolean,
+    progress: Int,
+    onDismiss: () -> Unit,
+    onInstall: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = { if (!downloading) onDismiss() },
+        icon = { Icon(Icons.Default.CloudDownload, contentDescription = null) },
+        title = { Text("Actualizacion disponible") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Hay una nueva version de Control Electrico.")
+                MetricRow("Version", update.versionName)
+                MetricRow("Archivo", update.apkAssetName)
+                MetricRow("Tamaño", update.apkSizeBytes.fileSize())
+                if (update.releaseName.isNotBlank()) {
+                    MetricRow("Release", update.releaseName)
+                }
+                if (message.isNotBlank()) {
+                    Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (downloading) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Text("$progress%", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Text(
+                    text = "Android pedira confirmar la instalacion manualmente.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = !downloading,
+                onClick = onInstall,
+                shape = RoundedCornerShape(22.dp)
+            ) {
+                Icon(Icons.Default.FileDownload, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Descargar e instalar")
+            }
+        },
+        dismissButton = {
+            TextButton(enabled = !downloading, onClick = onDismiss) {
+                Text("Mas tarde")
+            }
+        },
+        shape = RoundedCornerShape(28.dp)
     )
 }
 
@@ -1141,7 +1378,12 @@ private fun PdfImportReviewDialog(
         shape = RoundedCornerShape(24.dp),
         title = { Text("Revisar PDF importado") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Text(
                     text = "Estos campos se cargaron al formulario. Los pendientes necesitan revision manual.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1385,6 +1627,7 @@ private fun SummaryBackupCard(repository: ElectricRepository) {
 @Composable
 private fun SettingsScreen(repository: ElectricRepository, modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val current = repository.settings.value
     var igvPercent by rememberSaveable { mutableStateOf((current.igvRate * 100.0).input()) }
     var roundUp by rememberSaveable { mutableStateOf(current.roundUpToTenth) }
@@ -1392,12 +1635,27 @@ private fun SettingsScreen(repository: ElectricRepository, modifier: Modifier = 
     var accountHolder by rememberSaveable { mutableStateOf(current.accountHolder) }
     var reminderEnabled by rememberSaveable { mutableStateOf(current.monthlyReminderEnabled) }
     var reminderDay by rememberSaveable { mutableStateOf(current.reminderDay.toString()) }
+    var updateRepositoryUrl by rememberSaveable { mutableStateOf(current.updateRepositoryUrl) }
+    var checkingUpdate by rememberSaveable { mutableStateOf(false) }
+    var downloadingUpdate by rememberSaveable { mutableStateOf(false) }
+    var updateMessage by rememberSaveable { mutableStateOf("") }
+    var updateProgress by rememberSaveable { mutableStateOf(0) }
+    var availableUpdate by remember { mutableStateOf<AppUpdateInfo?>(null) }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (!granted) {
             Toast.makeText(context, "Sin permiso de notificaciones no se mostrara el recordatorio.", Toast.LENGTH_LONG).show()
         }
+    }
+    val installPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        Toast.makeText(
+            context,
+            "Si activaste el permiso, vuelve a tocar Descargar e instalar.",
+            Toast.LENGTH_LONG
+        ).show()
     }
 
     LazyColumn(
@@ -1428,8 +1686,10 @@ private fun SettingsScreen(repository: ElectricRepository, modifier: Modifier = 
                         supplyAlias = supplyAlias.trim(),
                         accountHolder = accountHolder.trim(),
                         monthlyReminderEnabled = reminderEnabled,
-                        reminderDay = reminderDay.toIntValue().coerceIn(1, 28)
+                        reminderDay = reminderDay.toIntValue().coerceIn(1, 28),
+                        updateRepositoryUrl = normalizeGithubRepositoryUrl(updateRepositoryUrl.trim())
                     )
+                    updateRepositoryUrl = next.updateRepositoryUrl
                     repository.saveSettings(next)
                     if (next.monthlyReminderEnabled) {
                         if (Build.VERSION.SDK_INT >= 33 &&
@@ -1445,6 +1705,290 @@ private fun SettingsScreen(repository: ElectricRepository, modifier: Modifier = 
                 }
             }
         }
+        item {
+            FormCard(title = "Actualizaciones por GitHub") {
+                TextInput("Repositorio GitHub", updateRepositoryUrl) { updateRepositoryUrl = it }
+                Text(
+                    text = "Ejemplo: https://github.com/tu_usuario/control-electrico. La app revisara el ultimo Release y buscara un APK.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Button(
+                    enabled = !checkingUpdate && !downloadingUpdate && updateRepositoryUrl.isNotBlank(),
+                    onClick = {
+                        val normalized = normalizeGithubRepositoryUrl(updateRepositoryUrl.trim())
+                        updateRepositoryUrl = normalized
+                        repository.saveSettings(repository.settings.value.copy(updateRepositoryUrl = normalized))
+                        availableUpdate = null
+                        updateMessage = "Consultando GitHub..."
+                        checkingUpdate = true
+                        scope.launch {
+                            runCatching {
+                                checkForGithubUpdate(context, normalized)
+                            }.onSuccess { update ->
+                                availableUpdate = update
+                                updateMessage = update?.let {
+                                    "Nueva version disponible: ${it.versionName} (${it.apkAssetName})"
+                                } ?: "La app ya esta actualizada."
+                            }.onFailure { error ->
+                                updateMessage = "No se pudo verificar: ${error.message ?: "error desconocido"}"
+                            }
+                            checkingUpdate = false
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(22.dp)
+                ) {
+                    Icon(Icons.Default.CloudDownload, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(if (checkingUpdate) "Buscando..." else "Buscar actualizacion")
+                }
+
+                if (updateMessage.isNotBlank()) {
+                    Text(updateMessage, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+
+                availableUpdate?.let { update ->
+                    MetricRow("Version encontrada", update.versionName)
+                    MetricRow("Tamaño APK", update.apkSizeBytes.fileSize())
+                    if (update.releaseName.isNotBlank()) {
+                        MetricRow("Release", update.releaseName)
+                    }
+                    Button(
+                        enabled = !downloadingUpdate,
+                        onClick = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                                !context.packageManager.canRequestPackageInstalls()
+                            ) {
+                                val intent = Intent(
+                                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                    Uri.parse("package:${context.packageName}")
+                                )
+                                installPermissionLauncher.launch(intent)
+                                updateMessage = "Activa Permitir desde esta fuente para instalar el APK descargado."
+                                return@Button
+                            }
+
+                            downloadingUpdate = true
+                            updateProgress = 0
+                            updateMessage = "Descargando APK..."
+                            scope.launch {
+                                runCatching {
+                                    downloadAndInstallUpdate(context, update) { progress ->
+                                        updateProgress = progress
+                                    }
+                                }.onSuccess {
+                                    updateMessage = "APK descargado. Confirma la instalacion en Android."
+                                }.onFailure { error ->
+                                    updateMessage = "No se pudo instalar: ${error.message ?: "error desconocido"}"
+                                }
+                                downloadingUpdate = false
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(22.dp)
+                    ) {
+                        Icon(Icons.Default.FileDownload, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(if (downloadingUpdate) "Descargando $updateProgress%" else "Descargar e instalar")
+                    }
+                    if (downloadingUpdate) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiagnosticsScreen(
+    repository: ElectricRepository,
+    syncManager: SupabaseSyncManager,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val backups = remember { listLocalBackups(context) }
+    val latestBackup = backups.maxByOrNull { it.lastModifiedMillis }
+    val syncState = syncManager.state.value
+    val versionName = remember { appVersionName(context) }
+    val diagnosticsText = buildDiagnosticsText(repository, syncManager, latestBackup, versionName)
+
+    LazyColumn(
+        modifier = modifier,
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            FormCard(title = "Estado general") {
+                MetricRow("Version Android", versionName)
+                MetricRow("Usuarios", repository.users.size.toString())
+                MetricRow("Recibos", repository.receipts.size.toString())
+                MetricRow("Lecturas", repository.readings.size.toString())
+                MetricRow("Servicios con monto", repository.serviceExpenses.count { it.amount > 0.0 }.toString())
+                MetricRow("Pagos registrados", repository.payments.size.toString())
+            }
+        }
+
+        item {
+            FormCard(title = "Respaldo") {
+                MetricRow("Respaldos locales", backups.size.toString())
+                MetricRow(
+                    "Ultimo respaldo",
+                    latestBackup?.let { "${it.name} - ${it.lastModifiedMillis.fileDateTime()}" } ?: "Sin respaldos"
+                )
+                Text(
+                    text = "Antes de importar datos, la app crea una copia automatica local para poder revisar el estado anterior.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        item {
+            FormCard(title = "Sincronización") {
+                MetricRow("Estado", syncStatusTitle(syncManager))
+                MetricRow("Mensaje", syncState.message.ifBlank { "Sin mensaje" })
+                MetricRow("Progreso", "${syncState.progress}%")
+                MetricRow("Revision nube", syncManager.revision.value.toString())
+                MetricRow(
+                    "Ultima sincronización",
+                    syncManager.lastSyncedAt.value.takeIf { it.isNotBlank() } ?: "Aun no realizada"
+                )
+                MetricRow("Cambios pendientes", if (syncManager.hasPendingChanges()) "Si" else "No")
+                if (syncState.error.isNotBlank()) {
+                    Text(syncState.error, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+
+        item {
+            FormCard(title = "Acciones de soporte") {
+                Button(
+                    onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Diagnostico Control Electrico", diagnosticsText))
+                        Toast.makeText(context, "Diagnostico copiado", Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(22.dp)
+                ) {
+                    Icon(Icons.Default.Save, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Copiar diagnostico")
+                }
+                Text(
+                    text = "No copia contrasenas ni claves de Supabase. Solo incluye conteos, version y estado visible.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PrivacyScreen(modifier: Modifier = Modifier) {
+    LazyColumn(
+        modifier = modifier,
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            FormCard(title = "Resumen de privacidad") {
+                PrivacyBullet("Los datos principales se guardan en el telefono usando almacenamiento local de la app.")
+                PrivacyBullet("La sincronización con Supabase es opcional y solo funciona si el usuario configura una cuenta.")
+                PrivacyBullet("Los respaldos manuales se guardan donde el usuario elija: telefono, carpeta local o selector de Android.")
+                PrivacyBullet("La app no debe recibir ni guardar claves secretas como service_role.")
+            }
+        }
+        item {
+            FormCard(title = "Datos que puede guardar") {
+                PrivacyBullet("Usuarios, recibos, lecturas internas, servicios, pagos y configuracion.")
+                PrivacyBullet("Archivos PDF seleccionados para lectura de recibo; los valores detectados se muestran para revision.")
+                PrivacyBullet("Estado de sincronización, revision y fecha de ultimo respaldo en la pantalla de diagnostico.")
+            }
+        }
+        item {
+            FormCard(title = "Buenas practicas") {
+                PrivacyBullet("Protege los respaldos JSON con clave si los vas a guardar fuera del telefono.")
+                PrivacyBullet("No compartas la clave publica junto con contrasenas ni datos personales.")
+                PrivacyBullet("Antes de reemplazar datos, revisa el conteo de usuarios, recibos, lecturas y pagos.")
+            }
+        }
+    }
+}
+
+@Composable
+private fun AboutScreen(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    LazyColumn(
+        modifier = modifier,
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            ElevatedCard(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(28.dp),
+                colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(
+                    modifier = Modifier.padding(22.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.medidor_original),
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(96.dp)
+                            .clip(RoundedCornerShape(24.dp))
+                    )
+                    Text(
+                        "Control Eléctrico",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        "Versión ${appVersionName(context)}",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Button(
+                        onClick = {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(APP_CREATOR_WEBSITE)))
+                        },
+                        shape = RoundedCornerShape(22.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Public, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Web del creador")
+                    }
+                }
+            }
+        }
+        item {
+            FormCard(title = "Qué hace la app") {
+                PrivacyBullet("Controla recibos, lecturas internas, usuario residual, servicios compartidos y pagos pendientes.")
+                PrivacyBullet("Permite respaldos JSON, CSV y JSON protegido con clave.")
+                PrivacyBullet("Puede sincronizar datos con Supabase si el usuario configura su propia cuenta.")
+            }
+        }
+    }
+}
+
+@Composable
+private fun PrivacyBullet(text: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Icon(
+            Icons.Default.CheckCircle,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp)
+        )
+        Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -2357,8 +2901,20 @@ private fun ServicesScreen(repository: ElectricRepository, modifier: Modifier = 
 }
 
 @Composable
-private fun SummaryScreen(repository: ElectricRepository, modifier: Modifier = Modifier) {
+private fun SummaryScreen(
+    repository: ElectricRepository,
+    modifier: Modifier = Modifier,
+    onOpenReceipt: () -> Unit = {},
+    onOpenReadings: () -> Unit = {},
+    onOpenUsers: () -> Unit = {},
+    onOpenSync: () -> Unit = {},
+    syncConfigured: Boolean = false
+) {
     val context = LocalContext.current
+    val uiPrefs = remember { context.getSharedPreferences("control_electrico_ui", Context.MODE_PRIVATE) }
+    var showQuickStart by rememberSaveable {
+        mutableStateOf(!uiPrefs.getBoolean(KEY_QUICK_START_DISMISSED, false))
+    }
     var period by rememberSaveable { mutableStateOf(repository.receipts.firstOrNull()?.period ?: currentPeriod()) }
     var selectedUserId by rememberSaveable { mutableStateOf(ALL_USERS_OPTION) }
     var pendingPaymentUserId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -2439,8 +2995,15 @@ private fun SummaryScreen(repository: ElectricRepository, modifier: Modifier = M
     }
     val isUserSummary = selectedUser != ALL_USERS_OPTION
     val selectedResult = visibleResults.firstOrNull()
-    val selectedPaymentBalance = selectedResult?.let {
+    val selectedPaymentBalance = if (isUserSummary) selectedResult?.let {
         paymentBalances[selectedPeriod to it.userId]
+    } else null
+    val generalPaymentTotal = remember(selectedPeriod, summary, paymentBalances) {
+        PaymentLedger.outstandingTotalForPeriod(
+            period = selectedPeriod,
+            summary = summary,
+            balances = paymentBalances
+        )
     }
     val selectedUserLabel = userOptions.firstOrNull { it.id == selectedUser }?.label ?: "Todos los usuarios"
     val activeServices = remember(selectedPeriod, services) {
@@ -2507,6 +3070,25 @@ private fun SummaryScreen(repository: ElectricRepository, modifier: Modifier = M
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        if (showQuickStart) {
+            item {
+                QuickStartCard(
+                    hasReceipt = receipts.isNotEmpty(),
+                    hasReading = readings.isNotEmpty(),
+                    hasUsers = users.isNotEmpty(),
+                    syncConfigured = syncConfigured,
+                    onOpenReceipt = onOpenReceipt,
+                    onOpenReadings = onOpenReadings,
+                    onOpenUsers = onOpenUsers,
+                    onOpenSync = onOpenSync,
+                    onDismiss = {
+                        showQuickStart = false
+                        uiPrefs.edit().putBoolean(KEY_QUICK_START_DISMISSED, true).apply()
+                    }
+                )
+            }
+        }
+
         item {
             SummaryDashboardCard(
                 periodOptions = periodOptions,
@@ -2518,6 +3100,7 @@ private fun SummaryScreen(repository: ElectricRepository, modifier: Modifier = M
                 summary = summary,
                 selectedResult = selectedResult,
                 selectedPaymentBalance = selectedPaymentBalance,
+                generalPaymentTotal = generalPaymentTotal,
                 activeServices = activeServices,
                 selectedServiceTotal = selectedServiceTotal,
                 isUserSummary = isUserSummary,
@@ -2602,6 +3185,128 @@ private fun SummaryScreen(repository: ElectricRepository, modifier: Modifier = M
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun QuickStartCard(
+    hasReceipt: Boolean,
+    hasReading: Boolean,
+    hasUsers: Boolean,
+    syncConfigured: Boolean,
+    onOpenReceipt: () -> Unit,
+    onOpenReadings: () -> Unit,
+    onOpenUsers: () -> Unit,
+    onOpenSync: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(28.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Inicio rápido", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    Text(
+                        "Completa estos pasos para obtener tu primer resumen.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            QuickStartStepRow(
+                icon = Icons.Default.Person,
+                title = "Usuarios",
+                message = "Revisa usuarios activos y define si uno es residual.",
+                completed = hasUsers
+            )
+            QuickStartStepRow(
+                icon = Icons.Default.Speed,
+                title = "Recibo",
+                message = "Carga el PDF o registra el recibo del mes.",
+                completed = hasReceipt
+            )
+            QuickStartStepRow(
+                icon = Icons.Default.Edit,
+                title = "Lecturas",
+                message = "Ingresa las lecturas internas del periodo.",
+                completed = hasReading
+            )
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(onClick = onOpenReceipt, shape = RoundedCornerShape(22.dp)) {
+                    Icon(Icons.Default.Speed, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Recibo")
+                }
+                OutlinedButton(onClick = onOpenReadings, shape = RoundedCornerShape(22.dp)) {
+                    Icon(Icons.Default.Edit, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Lecturas")
+                }
+                OutlinedButton(onClick = onOpenUsers, shape = RoundedCornerShape(22.dp)) {
+                    Icon(Icons.Default.Person, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Usuarios")
+                }
+                OutlinedButton(onClick = onOpenSync, shape = RoundedCornerShape(22.dp)) {
+                    Icon(if (syncConfigured) Icons.Default.CloudUpload else Icons.Default.CloudOff, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (syncConfigured) "Cuenta" else "Sincronizar")
+                }
+            }
+
+            TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                Text("No volver a mostrar")
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuickStartStepRow(
+    icon: ImageVector,
+    title: String,
+    message: String,
+    completed: Boolean
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Icon(
+            imageVector = if (completed) Icons.Default.CheckCircle else icon,
+            contentDescription = null,
+            tint = if (completed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(22.dp)
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.SemiBold)
+            Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+        }
+        Text(
+            text = if (completed) "Listo" else "Pendiente",
+            color = if (completed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
 @Composable
 private fun ValidationWarningsCard(warnings: List<String>) {
     ElevatedCard(
@@ -2663,6 +3368,7 @@ private fun SummaryDashboardCard(
     summary: PeriodSummary,
     selectedResult: PaymentResult?,
     selectedPaymentBalance: PaymentBalance?,
+    generalPaymentTotal: Double,
     activeServices: List<ServiceExpense>,
     selectedServiceTotal: Double,
     isUserSummary: Boolean,
@@ -2674,7 +3380,7 @@ private fun SummaryDashboardCard(
         selectedPaymentBalance?.outstandingAmount()
             ?: (selectedResult.finalTotal + selectedServiceTotal)
     } else {
-        summary.totalAssignedWithServices
+        generalPaymentTotal
     }
     val dashboardLabel = if (isUserSummary) "Total a pagar" else "Total general del periodo"
     val userServices = if (selectedResult != null) {
@@ -3384,6 +4090,215 @@ private fun nextUserId(nextNumber: Int): String {
 }
 
 private fun currentPeriod(): String = YearMonth.now().toString()
+
+private fun appVersionName(context: Context): String {
+    return runCatching {
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
+    }.getOrDefault("desconocida")
+}
+
+private suspend fun checkForGithubUpdate(context: Context, repositoryUrl: String): AppUpdateInfo? {
+    val repo = githubRepoPath(repositoryUrl)
+        ?: error("Ingresa una URL valida de GitHub, por ejemplo https://github.com/usuario/repositorio")
+    val currentVersion = appVersionName(context)
+    val release = withContext(Dispatchers.IO) {
+        val connection = (URL("https://api.github.com/repos/$repo/releases/latest").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 15000
+            readTimeout = 20000
+            setRequestProperty("Accept", "application/vnd.github+json")
+            setRequestProperty("User-Agent", "Control-Electrico-Android")
+        }
+        try {
+            val response = if (connection.responseCode in 200..299) {
+                connection.inputStream.bufferedReader().use { it.readText() }
+            } else {
+                val errorBody = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                error("GitHub respondio ${connection.responseCode}: ${githubErrorMessage(errorBody)}")
+            }
+            JSONObject(response)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    val tag = release.optString("tag_name")
+    val latestVersion = tag.trim().removePrefix("v").removePrefix("V")
+    if (compareVersions(latestVersion, currentVersion) <= 0) return null
+    val assets = release.optJSONArray("assets").jsonObjects()
+    val apkAsset = assets
+        .filter { it.optString("name").endsWith(".apk", ignoreCase = true) }
+        .sortedWith(
+            compareByDescending<JSONObject> { it.optString("name").contains("android", ignoreCase = true) }
+                .thenByDescending { it.optString("name").contains(latestVersion, ignoreCase = true) }
+        )
+        .firstOrNull()
+        ?: error("El ultimo Release no tiene un archivo APK adjunto.")
+
+    return AppUpdateInfo(
+        tagName = tag,
+        versionName = latestVersion.ifBlank { tag },
+        releaseName = release.optString("name"),
+        body = release.optString("body"),
+        apkAssetName = apkAsset.optString("name"),
+        apkDownloadUrl = apkAsset.optString("browser_download_url"),
+        apkSizeBytes = apkAsset.optLong("size", 0L),
+        publishedAt = release.optString("published_at")
+    )
+}
+
+private suspend fun downloadAndInstallUpdate(
+    context: Context,
+    update: AppUpdateInfo,
+    onProgress: suspend (Int) -> Unit
+) {
+    val apkFile = withContext(Dispatchers.IO) {
+        val updatesDir = File(context.cacheDir, "github_updates").apply { mkdirs() }
+        updatesDir.listFiles()?.forEach { file ->
+            if (file.extension.equals("apk", ignoreCase = true)) file.delete()
+        }
+        val safeApkName = update.apkAssetName
+            .removeSuffix(".apk")
+            .fileNameSafe()
+            .ifBlank { "control_electrico_${update.versionName.fileNameSafe()}" } + ".apk"
+        val target = File(updatesDir, safeApkName)
+        val connection = (URL(update.apkDownloadUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 15000
+            readTimeout = 60000
+            setRequestProperty("User-Agent", "Control-Electrico-Android")
+        }
+        try {
+            if (connection.responseCode !in 200..299) {
+                error("Descarga rechazada por GitHub (${connection.responseCode}).")
+            }
+            val total = connection.contentLengthLong.coerceAtLeast(update.apkSizeBytes)
+            var downloaded = 0L
+            connection.inputStream.use { input ->
+                target.outputStream().use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        output.write(buffer, 0, read)
+                        downloaded += read
+                        if (total > 0) {
+                            withContext(Dispatchers.Main) {
+                                onProgress(((downloaded * 100) / total).toInt().coerceIn(0, 100))
+                            }
+                        }
+                    }
+                }
+            }
+            target
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    rememberPendingUpdateApk(context, apkFile, update.versionName)
+    val apkUri = FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        apkFile
+    )
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(apkUri, "application/vnd.android.package-archive")
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    try {
+        context.startActivity(intent)
+    } catch (error: ActivityNotFoundException) {
+        throw IllegalStateException("No se encontro instalador de paquetes en este dispositivo.", error)
+    }
+}
+
+private fun githubRepoPath(rawUrl: String): String? {
+    val cleaned = rawUrl.trim()
+        .removeSuffix("/")
+        .removeSuffix(".git")
+        .removeSuffix("/releases")
+        .removeSuffix("/releases/latest")
+    val match = Regex("""github\.com[:/]+([^/\s]+)/([^/\s]+)""", RegexOption.IGNORE_CASE)
+        .find(cleaned)
+        ?: return null
+    return "${match.groupValues[1]}/${match.groupValues[2].removeSuffix(".git")}"
+}
+
+private fun normalizeGithubRepositoryUrl(rawUrl: String): String {
+    if (rawUrl.isBlank()) return ""
+    return githubRepoPath(rawUrl)?.let { "https://github.com/$it" } ?: rawUrl.trim()
+}
+
+private fun compareVersions(left: String, right: String): Int {
+    val leftParts = versionParts(left)
+    val rightParts = versionParts(right)
+    val maxSize = maxOf(leftParts.size, rightParts.size, 1)
+    repeat(maxSize) { index ->
+        val comparison = (leftParts.getOrElse(index) { 0 }).compareTo(rightParts.getOrElse(index) { 0 })
+        if (comparison != 0) return comparison
+    }
+    return 0
+}
+
+private fun versionParts(version: String): List<Int> {
+    return Regex("""\d+""")
+        .findAll(version)
+        .map { it.value.toIntOrNull() ?: 0 }
+        .toList()
+}
+
+private fun githubErrorMessage(raw: String): String {
+    return runCatching { JSONObject(raw).optString("message") }
+        .getOrDefault("")
+        .ifBlank { "no se pudo leer el ultimo Release" }
+}
+
+private fun rememberPendingUpdateApk(context: Context, apkFile: File, targetVersion: String) {
+    context.getSharedPreferences("control_electrico_updates", Context.MODE_PRIVATE)
+        .edit()
+        .putString("pending_apk_path", apkFile.absolutePath)
+        .putString("pending_target_version", targetVersion)
+        .apply()
+}
+
+private fun shouldCheckGithubUpdate(context: Context): Boolean {
+    val prefs = context.getSharedPreferences("control_electrico_updates", Context.MODE_PRIVATE)
+    val lastChecked = prefs.getLong("last_github_check_millis", 0L)
+    val oneDayMillis = 24L * 60L * 60L * 1000L
+    return System.currentTimeMillis() - lastChecked > oneDayMillis
+}
+
+private fun markGithubUpdateChecked(context: Context) {
+    context.getSharedPreferences("control_electrico_updates", Context.MODE_PRIVATE)
+        .edit()
+        .putLong("last_github_check_millis", System.currentTimeMillis())
+        .apply()
+}
+
+private fun cleanupInstalledUpdateIfNeeded(context: Context) {
+    val prefs = context.getSharedPreferences("control_electrico_updates", Context.MODE_PRIVATE)
+    val path = prefs.getString("pending_apk_path", "").orEmpty()
+    val targetVersion = prefs.getString("pending_target_version", "").orEmpty()
+    val updatesDir = File(context.cacheDir, "github_updates")
+    if (path.isBlank() || targetVersion.isBlank()) {
+        updatesDir.listFiles()?.forEach { file ->
+            if (file.extension.equals("apk", ignoreCase = true) && file.lastModified() < System.currentTimeMillis() - 7L * 24L * 60L * 60L * 1000L) {
+                file.delete()
+            }
+        }
+        return
+    }
+
+    if (compareVersions(appVersionName(context), targetVersion) >= 0) {
+        File(path).delete()
+        updatesDir.listFiles()?.forEach { file ->
+            if (file.extension.equals("apk", ignoreCase = true)) file.delete()
+        }
+        prefs.edit().clear().apply()
+    }
+}
 
 private fun suggestedPreviousReading(
     readings: List<MeterReading>,
@@ -4187,6 +5102,45 @@ private fun buildBackupJson(repository: ElectricRepository): String {
 private fun buildBackupJsonForExport(repository: ElectricRepository, password: String): String {
     val plainJson = buildBackupJson(repository)
     return if (password.isBlank()) plainJson else encryptBackupJson(plainJson, password)
+}
+
+private fun ElectricRepository.snapshotBackupData(): BackupData {
+    return BackupData(
+        users = users.toList(),
+        receipts = receipts.toList(),
+        readings = readings.toList(),
+        services = serviceExpenses.filter { it.amount > 0.0 },
+        payments = payments.toList()
+    )
+}
+
+private fun buildDiagnosticsText(
+    repository: ElectricRepository,
+    syncManager: SupabaseSyncManager,
+    latestBackup: LocalBackupInfo?,
+    versionName: String
+): String {
+    val syncState = syncManager.state.value
+    return buildString {
+        appendLine("Control Electrico - Diagnostico")
+        appendLine("Version Android: $versionName")
+        appendLine("Usuarios: ${repository.users.size}")
+        appendLine("Recibos: ${repository.receipts.size}")
+        appendLine("Lecturas: ${repository.readings.size}")
+        appendLine("Servicios con monto: ${repository.serviceExpenses.count { it.amount > 0.0 }}")
+        appendLine("Pagos: ${repository.payments.size}")
+        appendLine("Ultimo periodo con recibo: ${repository.receipts.firstOrNull()?.period ?: "Sin recibos"}")
+        appendLine("Ultimo respaldo local: ${latestBackup?.let { "${it.name} - ${it.lastModifiedMillis.fileDateTime()}" } ?: "Sin respaldos"}")
+        appendLine("Supabase configurado: ${if (syncManager.isConfigured()) "Si" else "No"}")
+        appendLine("Cuenta conectada: ${if (syncManager.isSignedIn()) "Si" else "No"}")
+        appendLine("Estado sincronizacion: ${syncStatusTitle(syncManager)}")
+        appendLine("Mensaje sincronizacion: ${syncState.message}")
+        appendLine("Progreso: ${syncState.progress}%")
+        appendLine("Revision nube: ${syncManager.revision.value}")
+        appendLine("Ultima sincronizacion: ${syncManager.lastSyncedAt.value.ifBlank { "Aun no realizada" }}")
+        appendLine("Cambios pendientes: ${if (syncManager.hasPendingChanges()) "Si" else "No"}")
+        if (syncState.error.isNotBlank()) appendLine("Error: ${syncState.error}")
+    }
 }
 
 private fun parseBackupContent(raw: String, password: String = ""): BackupData {

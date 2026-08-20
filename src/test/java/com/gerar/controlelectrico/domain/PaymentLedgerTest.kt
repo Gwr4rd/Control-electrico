@@ -63,23 +63,45 @@ class PaymentLedgerTest {
         assertEquals(60.0, balance.outstandingDebtItems.single().remainingAmount, 0.001)
     }
 
+    @Test
+    fun totalOutstandingForPeriodSumsEveryUserBalance() {
+        val periodSummary = summary(
+            period = "2026-02",
+            totals = listOf("U01" to 100.0, "U02" to 80.0)
+        )
+        val balances = PaymentLedger.calculate(
+            summaries = mapOf("2026-02" to periodSummary),
+            payments = listOf(payment("2026-02", PaymentStatus.PARTIAL, 70.0, userId = "U01"))
+        )
+
+        assertEquals(
+            110.0,
+            PaymentLedger.outstandingTotalForPeriod("2026-02", periodSummary, balances),
+            0.001
+        )
+    }
+
     private fun summary(period: String, total: Double): PeriodSummary {
+        return summary(period, listOf("U01" to total))
+    }
+
+    private fun summary(period: String, totals: List<Pair<String, Double>>): PeriodSummary {
         return PeriodSummary(
             period = period,
-            participants = 1,
+            participants = totals.size,
             thresholdKwhPerUser = 0.0,
             fixedChargesPerUser = 0.0,
             ruralElectrificationPerUser = 0.0,
             serviceExpensesTotal = 0.0,
             serviceSharePerParticipant = 0.0,
-            totalAssigned = total,
-            totalAssignedWithServices = total,
+            totalAssigned = totals.sumOf { it.second },
+            totalAssignedWithServices = totals.sumOf { it.second },
             receiptDifference = 0.0,
             residualStatus = "OK",
-            results = listOf(
+            results = totals.map { (userId, total) ->
                 PaymentResult(
-                    userId = "U01",
-                    userName = "Usuario",
+                    userId = userId,
+                    userName = "Usuario $userId",
                     internalMeter = "1",
                     isResidual = false,
                     consumptionKwh = 0.0,
@@ -93,15 +115,20 @@ class PaymentLedgerTest {
                     finalTotal = total,
                     notes = ""
                 )
-            )
+            }
         )
     }
 
-    private fun payment(period: String, status: PaymentStatus, amount: Double): UserPayment {
+    private fun payment(
+        period: String,
+        status: PaymentStatus,
+        amount: Double,
+        userId: String = "U01"
+    ): UserPayment {
         return UserPayment(
-            id = "$period|U01",
+            id = "$period|$userId",
             period = period,
-            userId = "U01",
+            userId = userId,
             status = status,
             amountPaid = amount,
             paymentDate = "2026-01-01"

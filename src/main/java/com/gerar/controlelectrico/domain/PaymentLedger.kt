@@ -64,4 +64,15 @@ object PaymentLedger {
         }
         return balances
     }
+
+    fun outstandingTotalForPeriod(
+        period: String,
+        summary: PeriodSummary,
+        balances: Map<Pair<String, String>, PaymentBalance>
+    ): Double {
+        return summary.results.sumOf { result ->
+            balances[period to result.userId]?.remainingBalance
+                ?: result.finalTotalWithServices
+        }
+    }
 }

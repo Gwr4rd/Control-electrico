@@ -1,6 +1,21 @@
-# Control Electrico Android
+# Control Electrico
 
-Aplicacion Android para registrar usuarios, recibos mensuales, lecturas internas y calcular pagos de consumo electrico.
+Aplicacion para registrar usuarios, recibos mensuales, lecturas internas, servicios compartidos y pagos pendientes de consumo electrico.
+
+## Plataformas incluidas
+
+- `app/`: aplicacion Android 10+.
+- `web/`: aplicacion web publicable en Netlify u otro hosting estatico.
+- `windows/`: aplicacion Windows basada en Electron, con instalador MSI.
+- `release/`: notas, versiones y hashes de los artefactos generados.
+
+## Acerca de
+
+- Nombre: Control Electrico
+- Version Android: 1.7.4
+- Version Web: 1.0.2
+- Version Windows: 1.1.5
+- Web del creador: https://github.com/Gwr4rd/Control-electrico
 
 ## Requisitos
 
@@ -8,13 +23,35 @@ Aplicacion Android para registrar usuarios, recibos mensuales, lecturas internas
 - Android SDK 35
 - Android 10 o superior en el telefono (`minSdk = 29`)
 
-## Como abrir
+## Como abrir Android
 
 1. Abre Android Studio.
 2. Selecciona `Open`.
-3. Elige esta carpeta: `ControlElectricoAndroid`.
+3. Elige esta carpeta del repositorio.
 4. Espera a que Gradle sincronice.
 5. Ejecuta en un emulador o telefono Android 10+.
+
+## Como ejecutar Web
+
+```bash
+cd web
+pnpm install
+pnpm dev
+```
+
+## Como ejecutar Windows
+
+```bash
+cd windows
+pnpm install
+pnpm dev
+```
+
+Para generar el instalador:
+
+```bash
+pnpm build:msi
+```
 
 ## Logica incluida
 

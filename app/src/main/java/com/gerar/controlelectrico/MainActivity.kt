@@ -66,6 +66,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.MoreVert
@@ -242,7 +243,9 @@ private const val SETTINGS_TAB = 7
 private const val ACCOUNT_SYNC_TAB = 8
 private const val DIAGNOSTICS_TAB = 9
 private const val PRIVACY_TAB = 10
+private const val ABOUT_TAB = 11
 private const val KEY_QUICK_START_DISMISSED = "quick_start_dismissed"
+private const val APP_CREATOR_WEBSITE = "https://github.com/Gwr4rd/Control-electrico"
 private const val TARIFF_SINGLE = "Precio único por kWh"
 private const val TARIFF_TWO_BLOCKS = "Dos bloques kWh"
 private const val TARIFF_ESTIMATED = "Estimar si no hay precio"
@@ -296,7 +299,8 @@ private fun ControlElectricoApp(
         selectedTab == SETTINGS_TAB ||
         selectedTab == ACCOUNT_SYNC_TAB ||
         selectedTab == DIAGNOSTICS_TAB ||
-        selectedTab == PRIVACY_TAB
+        selectedTab == PRIVACY_TAB ||
+        selectedTab == ABOUT_TAB
     val title = when (selectedTab) {
         0 -> "Recibo"
         1 -> "Lecturas"
@@ -309,6 +313,7 @@ private fun ControlElectricoApp(
         ACCOUNT_SYNC_TAB -> "Cuenta y sincronización"
         DIAGNOSTICS_TAB -> "Diagnóstico"
         PRIVACY_TAB -> "Privacidad"
+        ABOUT_TAB -> "Acerca de"
         else -> "Control Eléctrico"
     }
 
@@ -562,6 +567,15 @@ private fun ControlElectricoApp(
                                 }
                             )
                             DropdownMenuItem(
+                                leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+                                text = { Text("Acerca de") },
+                                onClick = {
+                                    lastMainTab = selectedTab
+                                    selectedTab = ABOUT_TAB
+                                    menuExpanded = false
+                                }
+                            )
+                            DropdownMenuItem(
                                 leadingIcon = {
                                     Icon(
                                         if (repository.isAmoled.value) Icons.Default.LightMode else Icons.Default.NightsStay,
@@ -637,6 +651,7 @@ private fun ControlElectricoApp(
             ACCOUNT_SYNC_TAB -> AccountSyncScreen(syncManager, modifier)
             DIAGNOSTICS_TAB -> DiagnosticsScreen(repository, syncManager, modifier)
             PRIVACY_TAB -> PrivacyScreen(modifier)
+            ABOUT_TAB -> AboutScreen(modifier)
         }
     }
 }
@@ -1896,6 +1911,65 @@ private fun PrivacyScreen(modifier: Modifier = Modifier) {
                 PrivacyBullet("Protege los respaldos JSON con clave si los vas a guardar fuera del telefono.")
                 PrivacyBullet("No compartas la clave publica junto con contrasenas ni datos personales.")
                 PrivacyBullet("Antes de reemplazar datos, revisa el conteo de usuarios, recibos, lecturas y pagos.")
+            }
+        }
+    }
+}
+
+@Composable
+private fun AboutScreen(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    LazyColumn(
+        modifier = modifier,
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            ElevatedCard(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(28.dp),
+                colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(
+                    modifier = Modifier.padding(22.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.medidor_original),
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(96.dp)
+                            .clip(RoundedCornerShape(24.dp))
+                    )
+                    Text(
+                        "Control Eléctrico",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        "Versión ${appVersionName(context)}",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Button(
+                        onClick = {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(APP_CREATOR_WEBSITE)))
+                        },
+                        shape = RoundedCornerShape(22.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Public, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Web del creador")
+                    }
+                }
+            }
+        }
+        item {
+            FormCard(title = "Qué hace la app") {
+                PrivacyBullet("Controla recibos, lecturas internas, usuario residual, servicios compartidos y pagos pendientes.")
+                PrivacyBullet("Permite respaldos JSON, CSV y JSON protegido con clave.")
+                PrivacyBullet("Puede sincronizar datos con Supabase si el usuario configura su propia cuenta.")
             }
         }
     }

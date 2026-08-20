@@ -1,0 +1,17 @@
+{
+  "name": "Control Electrico",
+  "short_name": "Control",
+  "description": "Control de recibos, lecturas, servicios y pagos electricos.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f3f5f6",
+  "theme_color": "#168a52",
+  "icons": [
+    {
+      "src": "/app-icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+/.gradle/
+/.kotlin/
+/build/
+/app/build/
+**/node_modules/
+**/dist/
+/windows/release/
+release/win-unpacked/
+*.log
+*.tmp
+local.properties

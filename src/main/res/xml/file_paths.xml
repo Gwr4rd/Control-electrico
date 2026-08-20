@@ -3,4 +3,7 @@
     <cache-path
         name="shared_summaries"
         path="shared_summaries/" />
+    <cache-path
+        name="github_updates"
+        path="github_updates/" />
 </paths>
