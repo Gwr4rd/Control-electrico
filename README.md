@@ -1,21 +1,6 @@
-# Control Electrico
+# Control Electrico Android
 
-Aplicacion para registrar usuarios, recibos mensuales, lecturas internas, servicios compartidos y pagos pendientes de consumo electrico.
-
-## Plataformas incluidas
-
-- `app/`: aplicacion Android 10+.
-- `web/`: aplicacion web publicable en Netlify u otro hosting estatico.
-- `windows/`: aplicacion Windows basada en Electron, con instalador MSI.
-- `release/`: notas, versiones y hashes de los artefactos generados.
-
-## Acerca de
-
-- Nombre: Control Electrico
-- Version Android: 1.7.4
-- Version Web: 1.0.2
-- Version Windows: 1.1.5
-- Web del creador: https://github.com/Gwr4rd/Control-electrico
+Aplicacion Android para registrar usuarios, recibos mensuales, lecturas internas y calcular pagos de consumo electrico.
 
 ## Requisitos
 
@@ -23,35 +8,13 @@ Aplicacion para registrar usuarios, recibos mensuales, lecturas internas, servic
 - Android SDK 35
 - Android 10 o superior en el telefono (`minSdk = 29`)
 
-## Como abrir Android
+## Como abrir
 
 1. Abre Android Studio.
 2. Selecciona `Open`.
-3. Elige esta carpeta del repositorio.
+3. Elige esta carpeta: `ControlElectricoAndroid`.
 4. Espera a que Gradle sincronice.
 5. Ejecuta en un emulador o telefono Android 10+.
-
-## Como ejecutar Web
-
-```bash
-cd web
-pnpm install
-pnpm dev
-```
-
-## Como ejecutar Windows
-
-```bash
-cd windows
-pnpm install
-pnpm dev
-```
-
-Para generar el instalador:
-
-```bash
-pnpm build:msi
-```
 
 ## Logica incluida
 
@@ -89,6 +52,7 @@ pnpm build:msi
 - Exportacion de JSON protegido con clave opcional mediante cifrado AES-GCM.
 - Exportacion de respaldo CSV o JSON a archivo local o Google Drive mediante el selector de documentos de Android.
 - Importacion de respaldo CSV o JSON desde archivo local o Google Drive.
+- Exportacion e importacion directa con Google Sheets, creando una hoja `Control Electrico` con respaldo completo y pestañas legibles.
 - Importacion de JSON protegido escribiendo la misma clave antes de seleccionar el archivo.
 - Historial de respaldos locales dentro de la app.
 - Copia automatica local antes de importar cualquier respaldo.
@@ -156,11 +120,15 @@ En el menu superior de tres puntos puedes abrir `Centro de respaldo`. Desde ahi 
 - Guardar `JSON en archivo/Drive`: permite escoger Google Drive o una carpeta del telefono.
 - Guardar `CSV en archivo/Drive`: permite guardar una copia compatible con hojas de calculo.
 - Importar desde archivo/Drive: acepta respaldos CSV o JSON.
+- Subir respaldo a Google Sheets: solicita permiso de Google y crea o actualiza una hoja con los datos.
+- Importar desde Google Sheets: lee el respaldo de la hoja vinculada o de un enlace/ID pegado.
 - Restaurar desde el historial local de respaldos generados por la app.
 
 Antes de importar, la app crea automaticamente un respaldo local en JSON con el prefijo `auto_antes_importar`. La importacion permite escoger entre `Reemplazar todo` o `Fusionar datos`. El modo fusionar conserva lo actual y agrega/actualiza registros usando claves como usuario, periodo, lectura y servicio para evitar duplicados.
 
 El selector de documentos de Android permite guardar e importar respaldos desde una carpeta del telefono o Google Drive sin integrar una cuenta dentro de la aplicacion.
+
+La opcion de Google Sheets usa permisos de Google solicitados en el momento de subir o importar. El alcance utilizado es `drive.file`, limitado a hojas creadas o elegidas por la app.
 
 La opcion `Agregar/eliminar usuarios` se abre como pantalla completa sin barra inferior; usa el boton de atras en la parte superior para volver. Los servicios se administran desde la pestaña `Servicios`.
 

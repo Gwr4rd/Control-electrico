@@ -1,7 +1,7 @@
 {
   "name": "control-electrico-web",
-  "version": "1.0.2",
-  "description": "Aplicacion web para control electrico con respaldos locales y sincronizacion opcional mediante Supabase",
+  "version": "1.0.3",
+  "description": "Aplicacion web para control electrico con respaldos locales, Supabase y Google Sheets",
   "type": "module",
   "author": "Gerar",
   "license": "UNLICENSED",

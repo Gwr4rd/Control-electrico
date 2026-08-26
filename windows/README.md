@@ -4,7 +4,7 @@ Aplicacion de escritorio para Windows 10 y Windows 11 de 64 bits.
 
 ## Instalacion
 
-1. Ejecutar `ControlElectrico-Windows-1.1.2.msi`.
+1. Ejecutar `ControlElectrico-Windows-1.1.6.msi`.
 2. Seguir el asistente de instalacion.
 3. Abrir **Control Electrico** desde el escritorio o el menu Inicio.
 
@@ -15,6 +15,8 @@ incluye un certificado comercial de firma de codigo.
 
 - Los datos se guardan localmente para poder trabajar sin conexion.
 - El respaldo se puede exportar e importar desde CSV/JSON.
+- Tambien se puede crear o importar un respaldo desde Google Sheets usando la
+  hoja `Control Electrico`.
 - La sincronizacion opcional usa una cuenta propia de Supabase con correo y
   contrasena.
 - No se debe desinstalar la aplicacion ni borrar sus datos antes de confirmar que
@@ -40,4 +42,4 @@ pnpm install
 pnpm run build:msi
 ```
 
-El instalador se genera en `release/ControlElectrico-Windows-1.1.2.msi`.
+El instalador se genera en `release/ControlElectrico-Windows-1.1.6.msi`.

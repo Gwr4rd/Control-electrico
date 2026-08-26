@@ -1,6 +1,7 @@
 package com.gerar.controlelectrico
 
 import android.Manifest
+import android.app.Activity
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.ActivityNotFoundException
@@ -21,6 +22,7 @@ import android.provider.Settings
 import android.util.Base64
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -128,6 +130,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.gerar.controlelectrico.data.ElectricRepository
+import com.gerar.controlelectrico.data.GoogleSheetsAuthorization
+import com.gerar.controlelectrico.data.GoogleSheetsBackupManager
 import com.gerar.controlelectrico.data.PdfReceiptReader
 import com.gerar.controlelectrico.data.SupabaseConfig
 import com.gerar.controlelectrico.data.SupabaseSyncManager
@@ -215,6 +219,11 @@ private data class PendingImport(
     val backup: BackupData,
     val sourceLabel: String
 )
+
+private enum class GoogleSheetsAction {
+    EXPORT,
+    IMPORT
+}
 
 private data class LocalBackupInfo(
     val name: String,
@@ -1437,8 +1446,122 @@ private fun BackupCenterScreen(
     onBackupPasswordChange: (String) -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val googleSheetsManager = remember { GoogleSheetsBackupManager(context.applicationContext) }
     var refreshKey by rememberSaveable { mutableStateOf(0) }
     val localBackups = remember(refreshKey) { listLocalBackups(context) }
+    var googleSheetInput by rememberSaveable { mutableStateOf(repository.settings.value.googleSheetId) }
+    var googleSheetsBusy by rememberSaveable { mutableStateOf(false) }
+    var googleSheetsMessage by rememberSaveable { mutableStateOf("") }
+    var pendingGoogleAction by remember { mutableStateOf<GoogleSheetsAction?>(null) }
+
+    fun runGoogleSheetsAction(action: GoogleSheetsAction, accessToken: String) {
+        scope.launch {
+            googleSheetsBusy = true
+            googleSheetsMessage = if (action == GoogleSheetsAction.EXPORT) {
+                "Subiendo respaldo a Google Sheets..."
+            } else {
+                "Leyendo respaldo desde Google Sheets..."
+            }
+            runCatching {
+                when (action) {
+                    GoogleSheetsAction.EXPORT -> {
+                        val targetSheetId = GoogleSheetsBackupManager.extractSheetId(googleSheetInput)
+                            .ifBlank { repository.settings.value.googleSheetId }
+                        val result = googleSheetsManager.exportBackup(
+                            accessToken = accessToken,
+                            backupJson = buildBackupJson(repository),
+                            existingSpreadsheetId = targetSheetId
+                        )
+                        googleSheetInput = result.spreadsheetId
+                        repository.saveSettings(
+                            repository.settings.value.copy(
+                                googleSheetId = result.spreadsheetId,
+                                googleSheetName = "Control Electrico",
+                                googleSheetUpdatedAt = result.updatedAt
+                            )
+                        )
+                        googleSheetsMessage = "Respaldo guardado en Google Sheets."
+                        Toast.makeText(context, "Respaldo guardado en Google Sheets", Toast.LENGTH_LONG).show()
+                    }
+                    GoogleSheetsAction.IMPORT -> {
+                        val targetSheetId = GoogleSheetsBackupManager.extractSheetId(googleSheetInput)
+                            .ifBlank { repository.settings.value.googleSheetId }
+                        if (targetSheetId.isBlank()) error("Pega el enlace o ID de una hoja de Google Sheets.")
+                        val raw = googleSheetsManager.importBackup(accessToken, targetSheetId)
+                        googleSheetInput = targetSheetId
+                        repository.saveSettings(
+                            repository.settings.value.copy(
+                                googleSheetId = targetSheetId,
+                                googleSheetName = "Control Electrico",
+                                googleSheetUpdatedAt = LocalDateTime.now().toString()
+                            )
+                        )
+                        onPreviewImport(parseBackupContent(raw, backupPassword), "Google Sheets")
+                        googleSheetsMessage = "Respaldo de Google Sheets listo para revisar."
+                    }
+                }
+            }.onFailure { error ->
+                googleSheetsMessage = "Google Sheets: ${error.message}"
+                Toast.makeText(context, googleSheetsMessage, Toast.LENGTH_LONG).show()
+            }
+            googleSheetsBusy = false
+        }
+    }
+
+    val googleSheetsAuthLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        val action = pendingGoogleAction ?: return@rememberLauncherForActivityResult
+        pendingGoogleAction = null
+        if (result.resultCode != Activity.RESULT_OK) {
+            googleSheetsMessage = "Permiso de Google Sheets cancelado."
+            Toast.makeText(context, googleSheetsMessage, Toast.LENGTH_LONG).show()
+            return@rememberLauncherForActivityResult
+        }
+        runCatching {
+            googleSheetsManager.authorizationFromIntent(result.data)
+        }.onSuccess { authorization ->
+            runGoogleSheetsAction(action, authorization.accessToken)
+        }.onFailure { error ->
+            googleSheetsMessage = "Google Sheets: ${error.message}"
+            Toast.makeText(context, googleSheetsMessage, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    fun requestGoogleSheets(action: GoogleSheetsAction) {
+        val activity = context as? Activity
+        if (activity == null) {
+            googleSheetsMessage = "Google Sheets requiere abrir la app desde Android."
+            Toast.makeText(context, googleSheetsMessage, Toast.LENGTH_LONG).show()
+            return
+        }
+        pendingGoogleAction = action
+        googleSheetsBusy = true
+        googleSheetsMessage = "Solicitando permiso de Google Sheets..."
+        scope.launch {
+            runCatching {
+                googleSheetsManager.authorize(activity)
+            }.onSuccess { authorization ->
+                when (authorization) {
+                    is GoogleSheetsAuthorization.Ready -> {
+                        runGoogleSheetsAction(action, authorization.accessToken)
+                    }
+                    is GoogleSheetsAuthorization.NeedsResolution -> {
+                        googleSheetsBusy = false
+                        googleSheetsMessage = "Autoriza Google Sheets para continuar."
+                        googleSheetsAuthLauncher.launch(
+                            IntentSenderRequest.Builder(authorization.pendingIntent.intentSender).build()
+                        )
+                    }
+                }
+            }.onFailure { error ->
+                googleSheetsBusy = false
+                googleSheetsMessage = "Google Sheets: ${error.message}"
+                Toast.makeText(context, googleSheetsMessage, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     LazyColumn(
         modifier = modifier,
@@ -1542,6 +1665,51 @@ private fun BackupCenterScreen(
                     Icon(Icons.Default.CloudDownload, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Importar desde archivo/Drive")
+                }
+            }
+        }
+
+        item {
+            FormCard(title = "Google Sheets") {
+                Text(
+                    text = "Crea o actualiza una hoja de calculo en tu Google Drive. La hoja guarda un respaldo completo y pestañas legibles para revisar usuarios, recibos, lecturas, servicios y pagos.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TextInput("ID o enlace de la hoja", googleSheetInput) {
+                    googleSheetInput = it
+                }
+                Button(
+                    enabled = !googleSheetsBusy,
+                    onClick = { requestGoogleSheets(GoogleSheetsAction.EXPORT) },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(22.dp)
+                ) {
+                    Icon(Icons.Default.CloudUpload, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Subir respaldo a Google Sheets")
+                }
+                Button(
+                    enabled = !googleSheetsBusy,
+                    onClick = { requestGoogleSheets(GoogleSheetsAction.IMPORT) },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(22.dp)
+                ) {
+                    Icon(Icons.Default.CloudDownload, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Importar desde Google Sheets")
+                }
+                if (googleSheetsBusy) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                if (googleSheetsMessage.isNotBlank()) {
+                    Text(googleSheetsMessage, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (repository.settings.value.googleSheetId.isNotBlank()) {
+                    MetricRow("Hoja vinculada", repository.settings.value.googleSheetId)
+                    MetricRow(
+                        "Ultima actualizacion",
+                        repository.settings.value.googleSheetUpdatedAt.ifBlank { "Pendiente" }
+                    )
                 }
             }
         }
@@ -1687,6 +1855,9 @@ private fun SettingsScreen(repository: ElectricRepository, modifier: Modifier = 
                         accountHolder = accountHolder.trim(),
                         monthlyReminderEnabled = reminderEnabled,
                         reminderDay = reminderDay.toIntValue().coerceIn(1, 28),
+                        googleSheetId = repository.settings.value.googleSheetId,
+                        googleSheetName = repository.settings.value.googleSheetName,
+                        googleSheetUpdatedAt = repository.settings.value.googleSheetUpdatedAt,
                         updateRepositoryUrl = normalizeGithubRepositoryUrl(updateRepositoryUrl.trim())
                     )
                     updateRepositoryUrl = next.updateRepositoryUrl
@@ -5096,6 +5267,7 @@ private fun buildBackupJson(repository: ElectricRepository): String {
         .put("readings", JSONArray(repository.readings.map { it.toBackupJson() }))
         .put("services", JSONArray(repository.serviceExpenses.filter { it.amount > 0.0 }.map { it.toBackupJson() }))
         .put("payments", JSONArray(repository.payments.map { it.toBackupJson() }))
+        .put("settings", repository.settings.value.toBackupJson())
         .toString(2)
 }
 
@@ -5113,6 +5285,18 @@ private fun ElectricRepository.snapshotBackupData(): BackupData {
         payments = payments.toList()
     )
 }
+
+private fun AppSettings.toBackupJson(): JSONObject = JSONObject()
+    .put("igvRate", igvRate)
+    .put("roundUpToTenth", roundUpToTenth)
+    .put("supplyAlias", supplyAlias)
+    .put("accountHolder", accountHolder)
+    .put("monthlyReminderEnabled", monthlyReminderEnabled)
+    .put("reminderDay", reminderDay)
+    .put("googleSheetId", googleSheetId)
+    .put("googleSheetName", googleSheetName)
+    .put("googleSheetUpdatedAt", googleSheetUpdatedAt)
+    .put("updateRepositoryUrl", updateRepositoryUrl)
 
 private fun buildDiagnosticsText(
     repository: ElectricRepository,

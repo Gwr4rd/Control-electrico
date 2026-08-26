@@ -154,6 +154,9 @@ class ElectricRepository(context: Context) {
             .putString(KEY_ACCOUNT_HOLDER, settings.value.accountHolder)
             .putBoolean(KEY_MONTHLY_REMINDER_ENABLED, settings.value.monthlyReminderEnabled)
             .putInt(KEY_REMINDER_DAY, settings.value.reminderDay)
+            .putString(KEY_GOOGLE_SHEET_ID, settings.value.googleSheetId)
+            .putString(KEY_GOOGLE_SHEET_NAME, settings.value.googleSheetName)
+            .putString(KEY_GOOGLE_SHEET_UPDATED_AT, settings.value.googleSheetUpdatedAt)
             .putString(KEY_UPDATE_REPOSITORY_URL, settings.value.updateRepositoryUrl)
             .apply()
         onDataChanged?.invoke()
@@ -189,6 +192,9 @@ class ElectricRepository(context: Context) {
                     accountHolder = next.optString("accountHolder"),
                     monthlyReminderEnabled = next.optBoolean("monthlyReminderEnabled", false),
                     reminderDay = next.optInt("reminderDay", 25).coerceIn(1, 28),
+                    googleSheetId = next.optString("googleSheetId"),
+                    googleSheetName = next.optString("googleSheetName"),
+                    googleSheetUpdatedAt = next.optString("googleSheetUpdatedAt"),
                     updateRepositoryUrl = next.optString("updateRepositoryUrl", DEFAULT_UPDATE_REPOSITORY_URL)
                 )
             )
@@ -438,6 +444,9 @@ class ElectricRepository(context: Context) {
         .put("accountHolder", accountHolder)
         .put("monthlyReminderEnabled", monthlyReminderEnabled)
         .put("reminderDay", reminderDay)
+        .put("googleSheetId", googleSheetId)
+        .put("googleSheetName", googleSheetName)
+        .put("googleSheetUpdatedAt", googleSheetUpdatedAt)
         .put("updateRepositoryUrl", updateRepositoryUrl)
 
     private fun UserEntity.toElectricUser(): ElectricUser = ElectricUser(
@@ -675,6 +684,9 @@ class ElectricRepository(context: Context) {
         accountHolder = prefs.getString(KEY_ACCOUNT_HOLDER, "").orEmpty(),
         monthlyReminderEnabled = prefs.getBoolean(KEY_MONTHLY_REMINDER_ENABLED, false),
         reminderDay = prefs.getInt(KEY_REMINDER_DAY, 25).coerceIn(1, 28),
+        googleSheetId = prefs.getString(KEY_GOOGLE_SHEET_ID, "").orEmpty(),
+        googleSheetName = prefs.getString(KEY_GOOGLE_SHEET_NAME, "").orEmpty(),
+        googleSheetUpdatedAt = prefs.getString(KEY_GOOGLE_SHEET_UPDATED_AT, "").orEmpty(),
         updateRepositoryUrl = prefs.getString(KEY_UPDATE_REPOSITORY_URL, DEFAULT_UPDATE_REPOSITORY_URL).orEmpty()
     )
 
@@ -693,6 +705,9 @@ class ElectricRepository(context: Context) {
         const val KEY_ACCOUNT_HOLDER = "account_holder"
         const val KEY_MONTHLY_REMINDER_ENABLED = "monthly_reminder_enabled"
         const val KEY_REMINDER_DAY = "reminder_day"
+        const val KEY_GOOGLE_SHEET_ID = "google_sheet_id"
+        const val KEY_GOOGLE_SHEET_NAME = "google_sheet_name"
+        const val KEY_GOOGLE_SHEET_UPDATED_AT = "google_sheet_updated_at"
         const val KEY_UPDATE_REPOSITORY_URL = "update_repository_url"
         const val DEFAULT_UPDATE_REPOSITORY_URL = "https://github.com/Gwr4rd/Control-electrico"
     }

@@ -73,9 +73,16 @@ import { useSupabaseSync } from "./useSupabaseSync";
 import { SUPABASE_SETUP_SQL } from "./supabaseSetupSql";
 import { parseReceiptPdf } from "./pdfParser";
 import { downloadCsv, downloadEncryptedJson, downloadJson, importBackup } from "./backup";
+import {
+  extractGoogleSheetId,
+  exportToGoogleSheets,
+  googleSheetUrl,
+  googleSheetsEnvironmentStatus,
+  importFromGoogleSheets
+} from "./googleSheetsBackup";
 import "./styles.css";
 
-const APP_VERSION = "1.1.5";
+const APP_VERSION = "1.1.6";
 
 const NAV_ITEMS = [
   { id: "summary", label: "Resumen", icon: Activity },
@@ -1139,6 +1146,10 @@ function UsersModal({ store, onClose, notify }) {
 function BackupModal({ store, onClose, notify }) {
   const inputRef = useRef();
   const [password, setPassword] = useState("");
+  const [googleBusy, setGoogleBusy] = useState(false);
+  const googleStatus = googleSheetsEnvironmentStatus();
+  const sheetId = store.data.settings.googleSheetId || "";
+  const sheetUrl = googleSheetUrl(sheetId);
   const restore = async (file) => {
     if (!file) return;
     try {
@@ -1150,6 +1161,53 @@ function BackupModal({ store, onClose, notify }) {
       }
     } catch (error) {
       notify(`No se pudo importar: ${error.message}`);
+    }
+  };
+  const uploadToSheets = async () => {
+    setGoogleBusy(true);
+    try {
+      const result = await exportToGoogleSheets(store.data, sheetId);
+      store.saveSettings({
+        ...store.data.settings,
+        googleSheetId: result.spreadsheetId,
+        googleSheetName: "Control Electrico",
+        googleSheetUpdatedAt: result.updatedAt
+      });
+      store.markBackup("Google Sheets");
+      notify("Respaldo guardado en Google Sheets");
+    } catch (error) {
+      notify(`Google Sheets: ${error.message}`);
+    } finally {
+      setGoogleBusy(false);
+    }
+  };
+  const importFromSheets = async () => {
+    const typed = sheetId || prompt("Pega el enlace o ID de la hoja de Google Sheets que contiene el respaldo:");
+    const targetSheetId = extractGoogleSheetId(typed);
+    if (!targetSheetId) {
+      notify("No se indicó una hoja válida de Google Sheets");
+      return;
+    }
+    setGoogleBusy(true);
+    try {
+      const result = await importFromGoogleSheets(targetSheetId);
+      if (confirm("¿Reemplazar todos los datos actuales con el respaldo de Google Sheets?")) {
+        store.replaceData({
+          ...result.data,
+          settings: {
+            ...result.data.settings,
+            googleSheetId: result.spreadsheetId,
+            googleSheetName: "Control Electrico",
+            googleSheetUpdatedAt: new Date().toISOString()
+          }
+        });
+        notify("Respaldo de Google Sheets restaurado");
+        onClose();
+      }
+    } catch (error) {
+      notify(`Google Sheets: ${error.message}`);
+    } finally {
+      setGoogleBusy(false);
     }
   };
   return (
@@ -1176,11 +1234,26 @@ function BackupModal({ store, onClose, notify }) {
         }}><span><KeyRound /></span><strong>Guardar protegido</strong><small>JSON cifrado con clave</small></button>
         <button onClick={() => { downloadCsv(store.data); store.markBackup("CSV"); notify("CSV guardado"); }}><span><ArrowDownToLine /></span><strong>Guardar CSV</strong><small>Compatible con Excel</small></button>
         <button onClick={() => inputRef.current.click()}><span><Upload /></span><strong>Importar respaldo</strong><small>Admite JSON y CSV de Android</small></button>
+        <button disabled={!googleStatus.supported || googleBusy} onClick={uploadToSheets}><span><Cloud /></span><strong>Subir a Sheets</strong><small>{sheetId ? "Actualiza la hoja recordada" : "Crea una hoja privada"}</small></button>
+        <button disabled={!googleStatus.supported || googleBusy} onClick={importFromSheets}><span><Database /></span><strong>Importar Sheets</strong><small>Restaura desde Google Drive</small></button>
       </div>
       <input ref={inputRef} hidden type="file" accept=".json,.csv" onChange={(e) => restore(e.target.files[0])} />
       <div className="info-box">
         <HardDrive size={19} />
         <span>Último respaldo: {formatSyncDate(store.data.settings.lastBackupAt)}. Los archivos se guardan en la carpeta que selecciones desde el navegador.</span>
+      </div>
+      <div className={`info-box ${googleStatus.supported ? "" : "danger"}`}>
+        {googleStatus.supported ? <Cloud size={19} /> : <CloudOff size={19} />}
+        <span>
+          {googleStatus.supported
+            ? `Google Sheets: ${sheetId ? `hoja vinculada, última actualización ${formatSyncDate(store.data.settings.googleSheetUpdatedAt)}` : "sin hoja vinculada todavía"}.`
+            : googleStatus.message}
+        </span>
+        {sheetUrl && (
+          <button className="inline-action" type="button" onClick={() => window.open(sheetUrl, "_blank", "noopener,noreferrer")}>
+            Abrir hoja
+          </button>
+        )}
       </div>
     </Modal>
   );

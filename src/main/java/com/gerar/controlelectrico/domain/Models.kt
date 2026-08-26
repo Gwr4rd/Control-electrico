@@ -96,6 +96,9 @@ data class AppSettings(
     val accountHolder: String = "",
     val monthlyReminderEnabled: Boolean = false,
     val reminderDay: Int = 25,
+    val googleSheetId: String = "",
+    val googleSheetName: String = "",
+    val googleSheetUpdatedAt: String = "",
     val updateRepositoryUrl: String = "https://github.com/Gwr4rd/Control-electrico"
 )
 

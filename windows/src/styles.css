@@ -1016,7 +1016,7 @@ tbody tr:hover {
 
 .backup-options {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
   gap: 10px;
 }
 
@@ -1036,6 +1036,11 @@ tbody tr:hover {
 
 .backup-options > button:hover {
   border-color: var(--primary);
+}
+
+.backup-options > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
 }
 
 .backup-options span {
@@ -1069,6 +1074,23 @@ tbody tr:hover {
   color: var(--muted);
   background: var(--surface-2);
   font-size: 11px;
+}
+
+.info-box.danger {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface-2));
+}
+
+.inline-action {
+  margin-left: auto;
+  border: 0;
+  border-radius: 999px;
+  padding: 6px 10px;
+  color: var(--primary-strong);
+  background: var(--primary-soft);
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .backup-security {

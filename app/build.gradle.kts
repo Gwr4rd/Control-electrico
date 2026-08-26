@@ -13,8 +13,8 @@ android {
         applicationId = "com.gerar.controlelectrico"
         minSdk = 29
         targetSdk = 35
-        versionCode = 12
-        versionName = "1.7.4"
+        versionCode = 13
+        versionName = "1.7.5"
     }
 
     buildTypes {
@@ -55,8 +55,10 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
+    implementation("com.google.android.gms:play-services-auth:22.0.0")
     implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
 
     testImplementation("junit:junit:4.13.2")
     debugImplementation("androidx.compose.ui:ui-tooling")

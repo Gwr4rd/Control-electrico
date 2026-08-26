@@ -1,20 +1,43 @@
 import Papa from "papaparse";
-import { createInitialData } from "./domain";
+import { createInitialData } from "./domain.js";
+
+export function buildBackupPayload(data) {
+  return {
+    format: "control_electrico_backup",
+    version: 5,
+    createdAt: new Date().toISOString(),
+    ...data
+  };
+}
+
+export function normalizeBackupPayload(parsed) {
+  return {
+    ...createInitialData(),
+    users: parsed.users || [],
+    receipts: parsed.receipts || [],
+    readings: parsed.readings || [],
+    services: parsed.services || [],
+    payments: parsed.payments || [],
+    auditEvents: parsed.auditEvents || [],
+    settings: { ...createInitialData().settings, ...(parsed.settings || {}) }
+  };
+}
+
+export async function parseBackupText(text, password = "") {
+  const trimmed = text.trimStart();
+  if (trimmed.startsWith("{")) {
+    const rawParsed = JSON.parse(text);
+    const parsed = rawParsed.format === "control_electrico_encrypted_backup"
+      ? JSON.parse(await decryptBackup(rawParsed, password))
+      : rawParsed;
+    return normalizeBackupPayload(parsed);
+  }
+  return parseCsvBackup(text);
+}
 
 export function downloadJson(data) {
   const blob = new Blob(
-    [
-      JSON.stringify(
-        {
-          format: "control_electrico_backup",
-          version: 3,
-          createdAt: new Date().toISOString(),
-          ...data
-        },
-        null,
-        2
-      )
-    ],
+    [JSON.stringify(buildBackupPayload(data), null, 2)],
     { type: "application/json" }
   );
   downloadBlob(blob, `ControlElectrico_${timestamp()}.json`);
@@ -25,12 +48,7 @@ export async function downloadEncryptedJson(data, password) {
     throw new Error("La clave debe tener al menos 6 caracteres.");
   }
   const payload = JSON.stringify(
-    {
-      format: "control_electrico_backup",
-      version: 4,
-      createdAt: new Date().toISOString(),
-      ...data
-    },
+    buildBackupPayload(data),
     null,
     2
   );
@@ -140,21 +158,12 @@ export function downloadCsv(data) {
 export async function importBackup(file, password = "") {
   const text = await file.text();
   if (file.name.toLowerCase().endsWith(".json") || text.trimStart().startsWith("{")) {
-    const rawParsed = JSON.parse(text);
-    const parsed = rawParsed.format === "control_electrico_encrypted_backup"
-      ? JSON.parse(await decryptBackup(rawParsed, password))
-      : rawParsed;
-    return {
-      ...createInitialData(),
-      users: parsed.users || [],
-      receipts: parsed.receipts || [],
-      readings: parsed.readings || [],
-      services: parsed.services || [],
-      payments: parsed.payments || [],
-      auditEvents: parsed.auditEvents || [],
-      settings: { ...createInitialData().settings, ...(parsed.settings || {}) }
-    };
+    return parseBackupText(text, password);
   }
+  return parseCsvBackup(text);
+}
+
+function parseCsvBackup(text) {
   const result = Papa.parse(text, { skipEmptyLines: true });
   const data = createInitialData();
   result.data.slice(1).forEach((row) => {

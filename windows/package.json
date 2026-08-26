@@ -1,7 +1,7 @@
 {
   "name": "control-electrico-windows",
-  "version": "1.1.5",
-  "description": "Control electrico local con sincronizacion opcional mediante Supabase",
+  "version": "1.1.6",
+  "description": "Control electrico local con respaldo opcional en Google Sheets",
   "type": "module",
   "main": "electron/main.cjs",
   "author": "Gerar",

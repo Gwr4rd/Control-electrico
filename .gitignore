@@ -4,6 +4,7 @@
 /app/build/
 **/node_modules/
 **/dist/
+web/qa/
 /windows/release/
 release/win-unpacked/
 *.log

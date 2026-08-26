@@ -397,6 +397,9 @@ export function createInitialData() {
       appLockPinHash: "",
       appLockUpdatedAt: "",
       onboardingComplete: false,
+      googleSheetId: "",
+      googleSheetName: "",
+      googleSheetUpdatedAt: "",
       creatorWebsite: CREATOR_WEBSITE
     }
   };
