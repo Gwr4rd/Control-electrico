@@ -12,9 +12,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
 private val LightColors = lightColorScheme(
-    primary = Color(0xFF229ED9),
+    primary = Color(0xFF08668D),
     onPrimary = Color.White,
-    secondary = Color(0xFF31A8E0),
+    secondary = Color(0xFF246E69),
     onSecondary = Color.White,
     tertiary = Color(0xFF65B741),
     onTertiary = Color.White,

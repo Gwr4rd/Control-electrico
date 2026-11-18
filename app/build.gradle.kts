@@ -13,8 +13,8 @@ android {
         applicationId = "com.gerar.controlelectrico"
         minSdk = 29
         targetSdk = 35
-        versionCode = 13
-        versionName = "1.7.5"
+        versionCode = 14
+        versionName = "1.7.6"
     }
 
     buildTypes {

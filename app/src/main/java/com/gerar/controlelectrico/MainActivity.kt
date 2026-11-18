@@ -82,7 +82,21 @@ import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.ElectricMeter
+import androidx.compose.material.icons.outlined.Widgets
+import androidx.compose.material.icons.outlined.BarChart
+import androidx.compose.material.icons.outlined.ManageAccounts
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.Shield
+import com.gerar.controlelectrico.domain.ReadingEntry
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -276,10 +290,10 @@ private val tariffModeOptions = listOf(
 )
 
 private val appTabs = listOf(
-    AppTab("Recibo", Icons.Default.Speed),
-    AppTab("Lecturas", Icons.Default.Edit),
-    AppTab("Servicios", Icons.Default.AttachMoney),
-    AppTab("Resumen", Icons.Default.List)
+    AppTab("Recibo", Icons.Outlined.Speed),
+    AppTab("Lecturas", Icons.Outlined.ElectricMeter),
+    AppTab("Servicios", Icons.Outlined.Widgets),
+    AppTab("Resumen", Icons.Outlined.BarChart)
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -295,7 +309,7 @@ private fun ControlElectricoApp(
     var pendingCsv by remember { mutableStateOf("") }
     var pendingJson by remember { mutableStateOf("") }
     var pendingImport by remember { mutableStateOf<PendingImport?>(null) }
-    var backupPassword by rememberSaveable { mutableStateOf("") }
+    var backupPassword by remember { mutableStateOf("") }
     var startupUpdate by remember { mutableStateOf<AppUpdateInfo?>(null) }
     var startupUpdateMessage by rememberSaveable { mutableStateOf("") }
     var startupUpdateDownloading by rememberSaveable { mutableStateOf(false) }
@@ -318,7 +332,7 @@ private fun ControlElectricoApp(
         USERS_MANAGEMENT_TAB -> "Usuarios"
         SERVICES_MANAGEMENT_TAB -> "Servicios"
         BACKUP_CENTER_TAB -> "Respaldo"
-        SETTINGS_TAB -> "Configuracion"
+        SETTINGS_TAB -> "Configuración"
         ACCOUNT_SYNC_TAB -> "Cuenta y sincronización"
         DIAGNOSTICS_TAB -> "Diagnóstico"
         PRIVACY_TAB -> "Privacidad"
@@ -331,18 +345,14 @@ private fun ControlElectricoApp(
     }
 
     val csvLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
-        if (uri != null && pendingCsv.isNotBlank()) {
-            context.contentResolver.openOutputStream(uri)?.use { output ->
-                output.write(pendingCsv.toByteArray(Charsets.UTF_8))
-            }
-        }
+        val bytes = pendingCsv.takeIf { it.isNotBlank() }?.toByteArray(Charsets.UTF_8)
+        pendingCsv = ""
+        if (uri != null) scope.launch { writeExport(context, uri, bytes) }
     }
     val jsonLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
-        if (uri != null && pendingJson.isNotBlank()) {
-            context.contentResolver.openOutputStream(uri)?.use { output ->
-                output.write(pendingJson.toByteArray(Charsets.UTF_8))
-            }
-        }
+        val bytes = pendingJson.takeIf { it.isNotBlank() }?.toByteArray(Charsets.UTF_8)
+        pendingJson = ""
+        if (uri != null) scope.launch { writeExport(context, uri, bytes) }
     }
     val backupImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -485,7 +495,7 @@ private fun ControlElectricoApp(
                 navigationIcon = {
                     if (isManagementScreen) {
                         IconButton(onClick = { selectedTab = lastMainTab }) {
-                            Icon(Icons.Default.ArrowBack, contentDescription = "Atras")
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Volver")
                         }
                     } else {
                         Image(
@@ -507,7 +517,7 @@ private fun ControlElectricoApp(
                 actions = {
                     if (!isManagementScreen) {
                         IconButton(onClick = { menuExpanded = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "Menu")
+                            Icon(Icons.Default.MoreVert, contentDescription = "Abrir menú")
                         }
                         DropdownMenu(
                             expanded = menuExpanded,
@@ -517,8 +527,8 @@ private fun ControlElectricoApp(
                             shadowElevation = 10.dp
                         ) {
                             DropdownMenuItem(
-                                leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
-                                text = { Text("Agregar/eliminar usuarios") },
+                                leadingIcon = { Icon(Icons.Outlined.ManageAccounts, contentDescription = null) },
+                                text = { Text("Administrar usuarios") },
                                 onClick = {
                                     lastMainTab = selectedTab
                                     selectedTab = USERS_MANAGEMENT_TAB
@@ -549,8 +559,8 @@ private fun ControlElectricoApp(
                                 }
                             )
                             DropdownMenuItem(
-                                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
-                                text = { Text("Configuracion") },
+                                leadingIcon = { Icon(Icons.Outlined.Tune, contentDescription = null) },
+                                text = { Text("Configuración") },
                                 onClick = {
                                     lastMainTab = selectedTab
                                     selectedTab = SETTINGS_TAB
@@ -567,7 +577,7 @@ private fun ControlElectricoApp(
                                 }
                             )
                             DropdownMenuItem(
-                                leadingIcon = { Icon(Icons.Default.CheckCircle, contentDescription = null) },
+                                leadingIcon = { Icon(Icons.Outlined.Shield, contentDescription = null) },
                                 text = { Text("Privacidad") },
                                 onClick = {
                                     lastMainTab = selectedTab
@@ -1872,7 +1882,7 @@ private fun SettingsScreen(repository: ElectricRepository, modifier: Modifier = 
                     } else {
                         cancelMonthlyReminder(context)
                     }
-                    Toast.makeText(context, "Configuracion guardada", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Configuración guardada", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -2168,27 +2178,30 @@ private fun LiquidBottomBar(
     selectedTab: Int,
     onTabSelected: (Int) -> Unit
 ) {
-    val barShape = RoundedCornerShape(26.dp)
-    val itemShape = RoundedCornerShape(18.dp)
-    val barColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.68f)
-    val selectedColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-    val borderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.24f)
+    val barShape = RoundedCornerShape(32.dp)
+    val itemShape = RoundedCornerShape(24.dp)
+    val colors = MaterialTheme.colorScheme
+    val glass = Brush.verticalGradient(listOf(colors.surface, colors.surfaceVariant.copy(alpha = 0.76f)))
+    val rim = Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.64f), colors.outline.copy(alpha = 0.36f)))
+    val lens = Brush.verticalGradient(listOf(colors.primary.copy(alpha = 0.18f), colors.primary.copy(alpha = 0.07f)))
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .navigationBarsPadding()
             .padding(horizontal = 16.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center
     ) {
         Row(
             modifier = Modifier
+                .widthIn(max = 400.dp)
                 .fillMaxWidth()
-                .height(50.dp)
-                .shadow(18.dp, barShape, clip = false)
+                .shadow(5.dp, barShape, clip = false)
                 .clip(barShape)
-                .background(barColor)
-                .border(1.dp, borderColor, barShape)
-                .padding(horizontal = 5.dp, vertical = 5.dp),
+                .background(glass)
+                .border(1.dp, rim, barShape)
+                .selectableGroup()
+                .padding(4.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -2202,27 +2215,28 @@ private fun LiquidBottomBar(
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .height(40.dp)
+                        .heightIn(min = 48.dp)
                         .clip(itemShape)
-                        .background(if (selected) selectedColor else MaterialTheme.colorScheme.surface.copy(alpha = 0.0f))
-                        .clickable { onTabSelected(index) }
-                        .padding(horizontal = 4.dp, vertical = 3.dp),
+                        .then(if (selected) Modifier.background(lens).border(1.dp, rim, itemShape) else Modifier)
+                        .selectable(selected = selected, role = Role.Tab, onClick = { onTabSelected(index) })
+                        .padding(vertical = 4.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
                     Icon(
                         imageVector = tab.icon,
-                        contentDescription = tab.title,
+                        contentDescription = null,
                         tint = contentColor,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(21.dp)
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = tab.title,
                         color = contentColor,
-                        fontSize = 9.sp,
+                        fontSize = 12.sp,
+                        lineHeight = 15.sp,
                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                        maxLines = 1
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
                 }
             }
@@ -2639,7 +2653,7 @@ private fun ReadingsScreen(repository: ElectricRepository, modifier: Modifier = 
     var userId by rememberSaveable {
         mutableStateOf(
             repository.users.firstOrNull { it.isActiveInPeriod(period) && !it.isResidualInPeriod(period) }?.userId
-                ?: repository.users.firstOrNull { it.isActiveInPeriod(period) }?.userId.orEmpty()
+                .orEmpty()
         )
     }
     var internalDate by rememberSaveable { mutableStateOf("") }
@@ -2648,29 +2662,23 @@ private fun ReadingsScreen(repository: ElectricRepository, modifier: Modifier = 
     var notes by rememberSaveable { mutableStateOf("") }
     var showDatePicker by rememberSaveable { mutableStateOf(false) }
     var pendingDeleteReading by remember { mutableStateOf<MeterReading?>(null) }
-    val readingWarnings = listOfNotNull(
-        "La lectura actual es menor que la anterior".takeIf {
-            previousReading.toNullableDoubleValue() != null &&
-                currentReading.toNullableDoubleValue() != null &&
-                currentReading.toDoubleValue() < previousReading.toDoubleValue()
-        },
-        "Selecciona una fecha de lectura interna".takeIf { internalDate.isBlank() }
-    )
-    val datePickerState = rememberDatePickerState(
-        initialSelectedDateMillis = internalDate.toDateMillisOrNull() ?: LocalDate.now().toDateMillis()
-    )
+    val eligible = repository.users.filter { it.isActiveInPeriod(period) && !it.isResidualInPeriod(period) }
+    val readingWarnings = ReadingEntry.warnings(period, internalDate, previousReading.toNullableDoubleValue(), currentReading.toNullableDoubleValue()) +
+        listOfNotNull(
+            "Selecciona un usuario activo con medidor propio.".takeIf { eligible.none { it.userId == userId } },
+            "Ya existe una lectura para este usuario y periodo. Edita la lectura registrada.".takeIf {
+                repository.readings.any { it.userId == userId && it.period == period && it.id != editingId }
+            }
+        )
 
     fun applyPreviousReadingSuggestion(nextUserId: String = userId, nextDate: String = internalDate) {
-        if (repository.users.firstOrNull { it.userId == nextUserId }?.isResidualInPeriod(period) == true) return
-        suggestedPreviousReading(
-            readings = repository.readings,
-            userId = nextUserId,
-            internalDate = nextDate,
-            editingId = editingId
-        )?.let { previousReading = it.input() }
+        previousReading = ReadingEntry.previous(repository.readings, nextUserId, nextDate, editingId)?.input().orEmpty()
     }
 
     if (showDatePicker) {
+        val datePickerState = rememberDatePickerState(
+            initialSelectedDateMillis = internalDate.toDateMillisOrNull() ?: LocalDate.now().toDateMillis()
+        )
         DatePickerDialog(
             onDismissRequest = { showDatePicker = false },
             confirmButton = {
@@ -2678,8 +2686,10 @@ private fun ReadingsScreen(repository: ElectricRepository, modifier: Modifier = 
                     onClick = {
                         datePickerState.selectedDateMillis?.let { selectedMillis ->
                             val selectedDate = selectedMillis.toIsoDate()
-                            internalDate = selectedDate
-                            applyPreviousReadingSuggestion(nextDate = selectedDate)
+                            if (internalDate != selectedDate) {
+                                internalDate = selectedDate
+                                applyPreviousReadingSuggestion(nextDate = selectedDate)
+                            }
                         }
                         showDatePicker = false
                     }
@@ -2717,50 +2727,31 @@ private fun ReadingsScreen(repository: ElectricRepository, modifier: Modifier = 
         item {
             FormCard(title = "Lectura interna") {
                 FormSectionLabel("Usuario y fecha")
-                TextInput("Periodo (YYYY-MM)", period) { period = it }
-                TextInput("ID usuario", userId) {
-                    val nextUserId = it.uppercase(Locale.US)
-                    userId = nextUserId
-                    if (previousReading.isBlank()) applyPreviousReadingSuggestion(nextUserId = nextUserId)
-                }
-                if (repository.users.isNotEmpty()) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        repository.users.filter { it.isActiveInPeriod(period) && !it.isResidualInPeriod(period) }.take(3).forEach { user ->
-                            AssistChip(
-                                onClick = {
-                                    userId = user.userId
-                                    applyPreviousReadingSuggestion(nextUserId = user.userId)
-                                },
-                                label = { Text("${user.userId} ${user.name}") }
-                            )
-                        }
+                TextInput("Periodo (AAAA-MM)", period) { period = it }
+                UserDropdown("Usuario", userId, eligible.map { UserOption(it.userId, "${it.name} (${it.userId})") }) { next ->
+                    if (userId != next) {
+                        userId = next
+                        currentReading = ""
+                        applyPreviousReadingSuggestion(nextUserId = next)
                     }
                 }
                 FormSectionLabel("Lectura")
-                TextInput("Fecha lectura interna", internalDate) {
-                    internalDate = it
-                    if (previousReading.isBlank()) applyPreviousReadingSuggestion(nextDate = it)
-                }
                 Button(
-                    onClick = {
-                        datePickerState.selectedDateMillis =
-                            internalDate.toDateMillisOrNull() ?: LocalDate.now().toDateMillis()
-                        showDatePicker = true
-                    },
+                    onClick = { showDatePicker = true },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(Icons.Default.DateRange, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Seleccionar fecha en calendario")
+                    Text(if (internalDate.isBlank()) "Elegir fecha de lectura" else "Fecha de lectura: $internalDate")
                 }
                 DecimalInput("Lectura anterior", previousReading) { previousReading = it }
                 DecimalInput("Lectura actual", currentReading) { currentReading = it }
                 TextInput("Observaciones", notes, singleLine = false) { notes = it }
-                if (readingWarnings.isNotEmpty()) {
+                if (readingWarnings.isNotEmpty() && (internalDate.isNotBlank() || currentReading.isNotBlank() || eligible.isEmpty())) {
                     ValidationWarningsCard(readingWarnings)
                 }
                 SaveButton(
-                    enabled = period.isNotBlank() && userId.isNotBlank() && readingWarnings.none { it.contains("menor") },
+                    enabled = readingWarnings.isEmpty(),
                     text = "Guardar lectura"
                 ) {
                     repository.saveReading(
@@ -3089,14 +3080,12 @@ private fun SummaryScreen(
     var period by rememberSaveable { mutableStateOf(repository.receipts.firstOrNull()?.period ?: currentPeriod()) }
     var selectedUserId by rememberSaveable { mutableStateOf(ALL_USERS_OPTION) }
     var pendingPaymentUserId by rememberSaveable { mutableStateOf<String?>(null) }
+    val exportScope = rememberCoroutineScope()
     var pendingPdf by remember { mutableStateOf<ByteArray?>(null) }
     val pdfLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
         val bytes = pendingPdf
-        if (uri != null && bytes != null) {
-            context.contentResolver.openOutputStream(uri)?.use { output ->
-                output.write(bytes)
-            }
-        }
+        pendingPdf = null
+        if (uri != null) exportScope.launch { writeExport(context, uri, bytes) }
     }
     val users = repository.users.toList()
     val receipts = repository.receipts.toList()
@@ -4471,30 +4460,24 @@ private fun cleanupInstalledUpdateIfNeeded(context: Context) {
     }
 }
 
-private fun suggestedPreviousReading(
-    readings: List<MeterReading>,
-    userId: String,
-    internalDate: String,
-    editingId: String
-): Double? {
-    val selectedDate = internalDate.toLocalDateOrNull()
-    val candidates = readings
-        .filter { it.id != editingId }
-        .filter { it.userId.equals(userId, ignoreCase = true) }
-        .filter { !it.isResidual }
-        .filter { it.currentReading != null }
-
-    val datedCandidate = candidates
-        .mapNotNull { reading ->
-            val date = reading.internalReadingDate.toLocalDateOrNull() ?: return@mapNotNull null
-            if (selectedDate != null && !date.isBefore(selectedDate)) return@mapNotNull null
-            reading to date
+private suspend fun writeExport(context: Context, uri: Uri, bytes: ByteArray?) {
+    val message = if (bytes == null) {
+        "La exportación se interrumpió. Vuelve a elegir Guardar."
+    } else {
+        try {
+            withContext(Dispatchers.IO) {
+                val stream = context.contentResolver.openOutputStream(uri, "wt")
+                    ?: throw java.io.IOException("No se pudo abrir el destino")
+                stream.use { it.write(bytes) }
+            }
+            "Archivo guardado."
+        } catch (error: java.io.IOException) {
+            "No se pudo guardar el archivo: ${error.localizedMessage}"
+        } catch (error: SecurityException) {
+            "Sin permiso para guardar en este destino."
         }
-        .maxByOrNull { it.second }
-        ?.first
-
-    return datedCandidate?.currentReading
-        ?: candidates.maxByOrNull { it.period }?.currentReading
+    }
+    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
 }
 
 private fun String.toLocalDateOrNull(): LocalDate? {
